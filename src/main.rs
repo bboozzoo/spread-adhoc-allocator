@@ -29,7 +29,7 @@ impl fmt::Display for LxcError {
             LxcError::Execution(eerr) => {
                 write!(
                     f,
-                    "lxc command exited with status {}, stderr: {}",
+                    "lxc command exited with status {}, stderr:\n{}",
                     eerr.exit_code,
                     String::from_utf8_lossy(&eerr.stderr)
                 )
@@ -52,6 +52,9 @@ fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
 }
 
 fn main() {
-    let out = run_lxc(&["foo"]).expect("lxc failed");
-    println!("lxc output:\n{}", String::from_utf8_lossy(&out));
+    let res = run_lxc(&["foo"]);
+    match res {
+        Err(err) => eprintln!("cannot run lxc command: {}", err),
+        Ok(out) => eprintln!("lxc output:\n{}", String::from_utf8_lossy(&out)),
+    }
 }
