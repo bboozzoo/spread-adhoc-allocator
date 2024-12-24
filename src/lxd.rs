@@ -13,6 +13,7 @@ pub struct LxcCommandError {
 pub enum LxcError {
     Start(io::Error),
     Execution(LxcCommandError),
+    Other(io::Error),
 }
 
 impl Error for LxcError {}
@@ -35,11 +36,12 @@ impl fmt::Display for LxcError {
                 )
             }
             LxcError::Start(ioerr) => ioerr.fmt(f),
+            LxcError::Other(ioerr) => ioerr.fmt(f),
         }
     }
 }
 
-pub fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
+fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
     let res = Command::new("lxc").args(args).output()?;
 
     if !res.status.success() {
@@ -49,4 +51,63 @@ pub fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
         }));
     }
     return Ok(res.stdout);
+}
+
+trait LxdAllocator {
+    fn allocate(&self) -> Result<(), LxcError>;
+    fn deallocate(&self, addr: &str) -> Result<(), LxcError>;
+    fn ensure_project(&self, project: &str) -> Result<(), LxcError>;
+}
+
+struct LxdCliALlocator {}
+
+impl LxdCliALlocator {
+    fn add_project(&self, project: &str) -> Result<(), LxcError> {
+        run_lxc(&["project", "add", project]).map(|_| ())
+    }
+
+    fn find_project(&self, project: &str, output: &Vec<u8>) -> Result<bool, LxcError> {
+        Err(LxcError::Other(io::Error::other("mock")))
+    }
+}
+
+impl LxdAllocator for LxdCliALlocator {
+    fn allocate(&self) -> Result<(), LxcError> {
+        if let Err(err) = run_lxc(&["launch"]) {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+    fn deallocate(&self, addr: &str) -> Result<(), LxcError> {
+        if let Err(err) = run_lxc(&["delete", "--force"]) {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_project(&self, project: &str) -> Result<(), LxcError> {
+        let res = run_lxc(&["project", "list", "--format=json"])
+            .map(|out| self.find_project(project, &out))
+            .map(|found| {
+                if found {
+                    self.add_project(project)
+                } else {
+                    Ok(())
+                }
+            })
+    }
+}
+
+fn default_allocator() -> LxdCliALlocator {
+    LxdCliALlocator {}
+}
+
+pub fn allocate() -> Result<(), LxcError> {
+    default_allocator().allocate()
+}
+
+pub fn deallocate(addr: &str) -> Result<(), LxcError> {
+    default_allocator().deallocate(addr)
 }
