@@ -73,24 +73,16 @@ impl LxdCliALlocator {
 
 impl LxdAllocator for LxdCliALlocator {
     fn allocate(&self) -> Result<(), LxcError> {
-        if let Err(err) = run_lxc(&["launch"]) {
-            Err(err)
-        } else {
-            Ok(())
-        }
+        run_lxc(&["launch"]).map(|_| ())
     }
     fn deallocate(&self, addr: &str) -> Result<(), LxcError> {
-        if let Err(err) = run_lxc(&["delete", "--force"]) {
-            Err(err)
-        } else {
-            Ok(())
-        }
+        run_lxc(&["delete", "--force"]).map(|_| ())
     }
 
     fn ensure_project(&self, project: &str) -> Result<(), LxcError> {
-        let res = run_lxc(&["project", "list", "--format=json"])
-            .map(|out| self.find_project(project, &out))
-            .map(|found| {
+        run_lxc(&["project", "list", "--format=json"])
+            .and_then(|out| self.find_project(project, &out))
+            .and_then(|found| {
                 if found {
                     self.add_project(project)
                 } else {
@@ -104,10 +96,10 @@ fn default_allocator() -> LxdCliALlocator {
     LxdCliALlocator {}
 }
 
-pub fn allocate() -> Result<(), LxcError> {
+pub fn allocate(sysname: &str) -> Result<(), LxcError> {
     default_allocator().allocate()
 }
 
-pub fn deallocate(addr: &str) -> Result<(), LxcError> {
+pub fn deallocate_by_addr(addr: &str) -> Result<(), LxcError> {
     default_allocator().deallocate(addr)
 }
