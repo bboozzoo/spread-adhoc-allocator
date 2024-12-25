@@ -53,7 +53,11 @@ fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
     return Ok(res.stdout);
 }
 
-struct LxdNodeDetails {}
+struct LxdNodeDetails<'a> {
+    name: &'a str,
+    CPUs: u32,
+    memory: u32,
+}
 
 pub trait LxdAllocatorExecutor {
     fn allocate(&self, node: &LxdNodeDetails) -> Result<(), LxcError>;
@@ -69,7 +73,8 @@ impl LxdCliAllocator {
     }
 
     fn find_project(&self, project: &str, output: &Vec<u8>) -> Result<bool, LxcError> {
-        Err(LxcError::Other(io::Error::other("mock")))
+        eprintln!("project output:\n{}", String::from_utf8_lossy(output));
+        Err(LxcError::Other(io::Error::other("find project mock error")))
     }
 }
 
@@ -95,13 +100,23 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
     }
 }
 
+const LXD_PROJECT_NAME: &'static str = "spread-adhoc";
+
 pub struct LxdAllocator<A: LxdAllocatorExecutor> {
     backend: A,
 }
 
 impl<A: LxdAllocatorExecutor> LxdAllocator<A> {
     pub fn allocate(&self, sysname: &str) -> Result<(), LxcError> {
-        self.backend.allocate(&LxdNodeDetails {})
+        if let Err(err) = self.backend.ensure_project(LXD_PROJECT_NAME) {
+            return Err(err);
+        }
+
+        self.backend.allocate(&LxdNodeDetails {
+            CPUs: 2,
+            memory: 1024 * 1024 * 1024 * 2,
+            name: sysname,
+        })
     }
 
     pub fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
