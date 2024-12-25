@@ -3,6 +3,9 @@ use std::fmt;
 use std::io;
 use std::process::Command;
 
+use log::debug;
+use serde;
+
 #[derive(Debug, Clone)]
 pub struct LxcCommandError {
     stderr: Vec<u8>,
@@ -69,12 +72,23 @@ pub struct LxdCliAllocator {}
 
 impl LxdCliAllocator {
     fn add_project(&self, project: &str) -> Result<(), LxcError> {
-        run_lxc(&["project", "add", project]).map(|_| ())
+        run_lxc(&["project", "create", project]).map(|_| ())
     }
 
     fn find_project(&self, project: &str, output: &Vec<u8>) -> Result<bool, LxcError> {
-        eprintln!("project output:\n{}", String::from_utf8_lossy(output));
-        Err(LxcError::Other(io::Error::other("find project mock error")))
+        #[derive(serde::Deserialize, Debug)]
+        struct _LxcProject {
+            name: String,
+        }
+
+        let projects: Vec<_LxcProject> =
+            serde_json::from_slice(output).expect("cannot parse project JSON");
+
+        debug!("projects:\n{:?}", projects);
+
+        let found = projects.iter().find(|p| p.name == project).is_some();
+        debug!("project found? {}", found);
+        return Ok(found);
     }
 }
 
@@ -91,7 +105,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
         run_lxc(&["project", "list", "--format=json"])
             .and_then(|out| self.find_project(project, &out))
             .and_then(|found| {
-                if found {
+                if !found {
                     self.add_project(project)
                 } else {
                     Ok(())
