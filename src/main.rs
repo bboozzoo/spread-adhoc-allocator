@@ -15,7 +15,7 @@ fn main() {
     match action.as_ref() {
         "allocate" => {
             let sysname = args.next().expect("no system name");
-            if let Err(err) = lxd::allocate(&sysname) {
+            if let Err(err) = lxd::allocator().allocate(&sysname) {
                 eprintln!("cannot allocate: {}", err)
             }
         }

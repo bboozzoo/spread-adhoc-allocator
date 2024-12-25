@@ -53,15 +53,17 @@ fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
     return Ok(res.stdout);
 }
 
-trait LxdAllocator {
-    fn allocate(&self) -> Result<(), LxcError>;
-    fn deallocate(&self, addr: &str) -> Result<(), LxcError>;
+struct LxdNodeDetails {}
+
+pub trait LxdAllocatorExecutor {
+    fn allocate(&self, node: &LxdNodeDetails) -> Result<(), LxcError>;
+    fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError>;
     fn ensure_project(&self, project: &str) -> Result<(), LxcError>;
 }
 
-struct LxdCliALlocator {}
+pub struct LxdCliAllocator {}
 
-impl LxdCliALlocator {
+impl LxdCliAllocator {
     fn add_project(&self, project: &str) -> Result<(), LxcError> {
         run_lxc(&["project", "add", project]).map(|_| ())
     }
@@ -71,11 +73,12 @@ impl LxdCliALlocator {
     }
 }
 
-impl LxdAllocator for LxdCliALlocator {
-    fn allocate(&self) -> Result<(), LxcError> {
+impl LxdAllocatorExecutor for LxdCliAllocator {
+    fn allocate(&self, node: &LxdNodeDetails) -> Result<(), LxcError> {
         run_lxc(&["launch"]).map(|_| ())
     }
-    fn deallocate(&self, addr: &str) -> Result<(), LxcError> {
+
+    fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
         run_lxc(&["delete", "--force"]).map(|_| ())
     }
 
@@ -92,14 +95,22 @@ impl LxdAllocator for LxdCliALlocator {
     }
 }
 
-fn default_allocator() -> LxdCliALlocator {
-    LxdCliALlocator {}
+pub struct LxdAllocator<A: LxdAllocatorExecutor> {
+    backend: A,
 }
 
-pub fn allocate(sysname: &str) -> Result<(), LxcError> {
-    default_allocator().allocate()
+impl<A: LxdAllocatorExecutor> LxdAllocator<A> {
+    pub fn allocate(&self, sysname: &str) -> Result<(), LxcError> {
+        self.backend.allocate(&LxdNodeDetails {})
+    }
+
+    pub fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
+        self.backend.deallocate_by_addr(addr)
+    }
 }
 
-pub fn deallocate_by_addr(addr: &str) -> Result<(), LxcError> {
-    default_allocator().deallocate(addr)
+pub fn allocator() -> LxdAllocator<LxdCliAllocator> {
+    LxdAllocator {
+        backend: LxdCliAllocator {},
+    }
 }
