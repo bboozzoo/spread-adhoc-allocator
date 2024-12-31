@@ -50,18 +50,6 @@ impl fmt::Display for LxcError {
     }
 }
 
-fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
-    let res = Command::new("lxc").args(args).output()?;
-
-    if !res.status.success() {
-        return Err(LxcError::Execution(LxcCommandError {
-            stderr: res.stderr,
-            exit_code: res.status.code().unwrap_or(255),
-        }));
-    }
-    return Ok(res.stdout);
-}
-
 struct LxdNodeDetails<'a> {
     image: &'a str,
     name: &'a str,
@@ -81,11 +69,20 @@ pub trait LxdAllocatorExecutor {
 pub struct LxdCliAllocator {}
 
 impl LxdCliAllocator {
-    fn add_project(&self, project: &str) -> Result<(), LxcError> {
-        run_lxc(&["project", "create", project]).map(|_| ())
+    fn add_project(project: &str) -> Result<(), LxcError> {
+        LxdCliAllocator::run_lxc(&[
+            "project",
+            "create",
+            project,
+            "-c",
+            "features.images=false",
+            "-c",
+            "features.profiles=false",
+        ])
+        .map(|_| ())
     }
 
-    fn find_project(&self, project: &str, output: &Vec<u8>) -> Result<bool, LxcError> {
+    fn find_project(project: &str, output: &Vec<u8>) -> Result<bool, LxcError> {
         #[derive(serde::Deserialize, Debug)]
         struct _LxcProject {
             name: String,
@@ -100,6 +97,52 @@ impl LxdCliAllocator {
         debug!("project found? {}", found);
         return Ok(found);
     }
+
+    fn list_nodes() -> Result<Vec<String>, LxcError> {
+        #[derive(serde::Deserialize, Debug)]
+        struct _LxcInstance {
+            name: String,
+        }
+
+        LxdCliAllocator::run_project_lxc(&["list", "--format=json"])
+            .and_then(|output| {
+                Ok(serde_json::from_slice::<Vec<_LxcInstance>>(&output)
+                    .expect("cannot parse instance list JSON"))
+            })
+            .and_then(|v| Ok(v.iter().map(|e| e.name.clone()).collect()))
+    }
+
+    fn run_project_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
+        // not particularly efficient
+        let mut project_args = vec!["--project", LXD_PROJECT_NAME];
+        for a in args {
+            project_args.push(a);
+        }
+        LxdCliAllocator::run_lxc(&project_args)
+    }
+
+    fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
+        let res = Command::new("lxc").args(args).output()?;
+
+        if !res.status.success() {
+            return Err(LxcError::Execution(LxcCommandError {
+                stderr: res.stderr,
+                exit_code: res.status.code().unwrap_or(255),
+            }));
+        }
+        return Ok(res.stdout);
+    }
+
+    fn deallocate_by_name(name: &str) -> Result<(), LxcError> {
+        LxdCliAllocator::run_project_lxc(&["delete", "--force", name]).map(|_| ())
+    }
+
+    fn lxdfiy_name(name: &str) -> String {
+        String::from_iter(name.chars().map(|c| match c {
+            '.' => '-',
+            _ => c,
+        }))
+    }
 }
 
 impl LxdAllocatorExecutor for LxdCliAllocator {
@@ -108,7 +151,8 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
         let cpu_arg = format!("limits.cpu={}", node.cpu);
         let secure_boot_arg = format!("security.secureboot={}", node.secure_boot);
         let root_size_arg = format!("root,size={}", node.root_size);
-        let mut args = vec![
+        let name = LxdCliAllocator::lxdfiy_name(node.name);
+        let args = vec![
             "launch",
             "--ephemeral",
             "--vm",
@@ -121,25 +165,32 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             "--device",
             &root_size_arg,
             node.image,
-            node.name,
+            &name,
         ];
-        run_lxc(&args).map(|_| ())
+        LxdCliAllocator::run_project_lxc(&args).map(|_| ())
     }
 
     fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
-        run_lxc(&["delete", "--force"]).map(|_| ())
+        LxdCliAllocator::run_project_lxc(&["delete", "--force"]).map(|_| ())
     }
 
     fn deallocate_all(&self) -> Result<(), LxcError> {
-        Err(LxcError::Other(io::Error::other("not implemented")))
+        let nodes = LxdCliAllocator::list_nodes()?;
+        log::debug!("deallocate {} nodes: {:?}", nodes.len(), nodes);
+
+        for name in nodes {
+            LxdCliAllocator::deallocate_by_name(&name)?;
+        }
+
+        Ok(())
     }
 
     fn ensure_project(&self, project: &str) -> Result<(), LxcError> {
-        run_lxc(&["project", "list", "--format=json"])
-            .and_then(|out| self.find_project(project, &out))
+        LxdCliAllocator::run_lxc(&["project", "list", "--format=json"])
+            .and_then(|out| LxdCliAllocator::find_project(project, &out))
             .and_then(|found| {
                 if !found {
-                    self.add_project(project)
+                    LxdCliAllocator::add_project(project)
                 } else {
                     Ok(())
                 }
