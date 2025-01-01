@@ -213,28 +213,38 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
     }
 
     fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
-        LxdCliAllocator::list_nodes().and_then(|instances| {
-            let res = instances.iter().find(|instance| {
-                instance.status == "Running"
-                    && instance
-                        .state
-                        .network
-                        .iter()
-                        .find(|(_, &ref iface)| {
-                            iface
-                                .addresses
-                                .iter()
-                                .find(|ifaceaddr| ifaceaddr.address == addr)
-                                .is_some()
-                        })
-                        .is_some()
-            });
+        let nodes = LxdCliAllocator::list_nodes()?;
 
-            match res {
-                None => Err(LxcError::NotFound),
-                Some(instance) => LxdCliAllocator::deallocate_by_name(&instance.name),
+        let mut name: Option<String> = None;
+        for instance in nodes.iter() {
+            if instance.status != "Running" {
+                continue;
             }
-        })
+
+            let has_match = instance
+                .state
+                .network
+                .iter()
+                .find(|(_, &ref iface)| {
+                    iface
+                        .addresses
+                        .iter()
+                        .find(|ifaceaddr| ifaceaddr.address == addr)
+                        .is_some()
+                })
+                .is_some();
+
+            if has_match {
+                name = Some(instance.name.clone());
+                break;
+            }
+        }
+
+        if let Some(name) = name {
+            LxdCliAllocator::deallocate_by_name(&name)
+        } else {
+            Err(LxcError::NotFound)
+        }
     }
 
     fn deallocate_all(&self) -> Result<(), LxcError> {
