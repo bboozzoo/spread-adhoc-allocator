@@ -66,20 +66,63 @@ pub trait LxdAllocatorExecutor {
     fn ensure_project(&self, project: &str) -> Result<(), LxcError>;
 }
 
-pub struct LxdCliAllocator {}
+enum LxcRunnerScope<'a> {
+    Global,
+    Project(&'a str),
+}
+
+struct LxcRunner<'a> {
+    scope: LxcRunnerScope<'a>,
+}
+
+impl<'a> LxcRunner<'a> {
+    fn new() -> Self {
+        LxcRunner {
+            scope: LxcRunnerScope::Global,
+        }
+    }
+
+    fn with_scope(&mut self, scope: LxcRunnerScope<'a>) -> &mut Self {
+        self.scope = scope;
+        self
+    }
+
+    fn run(&self, args: &[&str]) -> Result<Vec<u8>, LxcError> {
+        let mut cmd = Command::new("lxc");
+        if let LxcRunnerScope::Project(prj) = &self.scope {
+            cmd.arg("--project");
+            cmd.arg(&prj);
+        }
+
+        cmd.args(args);
+
+        let res = cmd.output()?;
+
+        if !res.status.success() {
+            return Err(LxcError::Execution(LxcCommandError {
+                stderr: res.stderr,
+                exit_code: res.status.code().unwrap_or(255),
+            }));
+        }
+        return Ok(res.stdout);
+    }
+}
+
+struct LxdCliAllocator {}
 
 impl LxdCliAllocator {
     fn add_project(project: &str) -> Result<(), LxcError> {
-        LxdCliAllocator::run_lxc(&[
-            "project",
-            "create",
-            project,
-            "-c",
-            "features.images=false",
-            "-c",
-            "features.profiles=false",
-        ])
-        .map(|_| ())
+        LxcRunner::new()
+            .run(&[
+                "project",
+                "create",
+                project,
+                "-c",
+                "features.images=false",
+                "-c",
+                "features.profiles=false",
+            ])
+            .map(|_| ())
     }
 
     fn find_project(project: &str, output: &Vec<u8>) -> Result<bool, LxcError> {
@@ -104,7 +147,9 @@ impl LxdCliAllocator {
             name: String,
         }
 
-        LxdCliAllocator::run_project_lxc(&["list", "--format=json"])
+        LxcRunner::new()
+            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+            .run(&["list", "--format=json"])
             .and_then(|output| {
                 Ok(serde_json::from_slice::<Vec<_LxcInstance>>(&output)
                     .expect("cannot parse instance list JSON"))
@@ -112,29 +157,11 @@ impl LxdCliAllocator {
             .and_then(|v| Ok(v.iter().map(|e| e.name.clone()).collect()))
     }
 
-    fn run_project_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
-        // not particularly efficient
-        let mut project_args = vec!["--project", LXD_PROJECT_NAME];
-        for a in args {
-            project_args.push(a);
-        }
-        LxdCliAllocator::run_lxc(&project_args)
-    }
-
-    fn run_lxc(args: &[&str]) -> Result<Vec<u8>, LxcError> {
-        let res = Command::new("lxc").args(args).output()?;
-
-        if !res.status.success() {
-            return Err(LxcError::Execution(LxcCommandError {
-                stderr: res.stderr,
-                exit_code: res.status.code().unwrap_or(255),
-            }));
-        }
-        return Ok(res.stdout);
-    }
-
     fn deallocate_by_name(name: &str) -> Result<(), LxcError> {
-        LxdCliAllocator::run_project_lxc(&["delete", "--force", name]).map(|_| ())
+        LxcRunner::new()
+            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+            .run(&["delete", "--force", name])
+            .map(|_| ())
     }
 
     fn lxdfiy_name(name: &str) -> String {
@@ -167,11 +194,18 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             node.image,
             &name,
         ];
-        LxdCliAllocator::run_project_lxc(&args).map(|_| ())
+
+        LxcRunner::new()
+            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+            .run(&args)
+            .map(|_| ())
     }
 
     fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
-        LxdCliAllocator::run_project_lxc(&["delete", "--force"]).map(|_| ())
+        LxcRunner::new()
+            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+            .run(&["delete", "--force"])
+            .map(|_| ())
     }
 
     fn deallocate_all(&self) -> Result<(), LxcError> {
@@ -186,8 +220,25 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
     }
 
     fn ensure_project(&self, project: &str) -> Result<(), LxcError> {
-        LxdCliAllocator::run_lxc(&["project", "list", "--format=json"])
-            .and_then(|out| LxdCliAllocator::find_project(project, &out))
+        #[derive(serde::Deserialize, Debug)]
+        struct _LxcProject {
+            name: String,
+        }
+
+        LxcRunner::new()
+            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+            .run(&["project", "list", "--format=json"])
+            .and_then(|output| {
+                let found = serde_json::from_slice::<Vec<_LxcProject>>(&output)
+                    .expect("cannot parse project JSON")
+                    .iter()
+                    .find(|p| p.name == project)
+                    .is_some();
+
+                debug!("project found {}", found);
+
+                Ok(found)
+            })
             .and_then(|found| {
                 if !found {
                     LxdCliAllocator::add_project(project)
