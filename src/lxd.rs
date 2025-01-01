@@ -200,12 +200,12 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
 
 const LXD_PROJECT_NAME: &'static str = "spread-adhoc";
 
-pub struct LxdAllocator<A: LxdAllocatorExecutor> {
-    backend: A,
+pub struct LxdAllocator {
+    backend: Box<dyn LxdAllocatorExecutor>,
     conf: LxdBackendConfig,
 }
 
-impl<A: LxdAllocatorExecutor> LxdAllocator<A> {
+impl LxdAllocator {
     pub fn allocate(&self, sysname: &str) -> Result<(), LxcError> {
         let sysconf = if let Some(sysconf) = self.conf.system.get(sysname) {
             sysconf
@@ -259,7 +259,7 @@ struct LxdBackendConfig {
     setup: HashMap<String, Vec<String>>,
 }
 
-pub fn allocator_with_config<R>(cfg: R) -> Result<LxdAllocator<LxdCliAllocator>, LxcError>
+pub fn allocator_with_config<R>(cfg: R) -> Result<LxdAllocator, LxcError>
 where
     R: io::Read,
 {
@@ -268,7 +268,7 @@ where
 
     Ok(LxdAllocator {
         conf: conf,
-        backend: LxdCliAllocator {},
+        backend: Box::new(LxdCliAllocator {}),
     })
 }
 
