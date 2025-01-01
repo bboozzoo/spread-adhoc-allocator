@@ -21,6 +21,7 @@ pub enum LxcError {
     Other(io::Error),
     Config(serde_yml::Error),
     Allocate(io::Error),
+    NotFound,
 }
 
 impl Error for LxcError {}
@@ -46,6 +47,7 @@ impl fmt::Display for LxcError {
             LxcError::Other(ioerr) => ioerr.fmt(f),
             LxcError::Config(srerr) => srerr.fmt(f),
             LxcError::Allocate(ioerr) => ioerr.fmt(f),
+            LxcError::NotFound => write!(f, "entry not found"),
         }
     }
 }
@@ -108,7 +110,36 @@ impl<'a> LxcRunner<'a> {
     }
 }
 
-struct LxdCliAllocator {}
+struct LxdCliAllocator;
+
+mod lxc {
+    pub mod types {
+        use std::collections::HashMap;
+
+        #[derive(serde::Deserialize, Debug)]
+        pub struct NetworkAddress {
+            pub family: String,
+            pub address: String,
+        }
+
+        #[derive(serde::Deserialize, Debug)]
+        pub struct NetworkState {
+            pub addresses: Vec<NetworkAddress>,
+        }
+
+        #[derive(serde::Deserialize, Debug)]
+        pub struct InstanceState {
+            pub network: HashMap<String, NetworkState>,
+        }
+
+        #[derive(serde::Deserialize, Debug)]
+        pub struct Instance {
+            pub name: String,
+            pub state: InstanceState,
+            pub status: String,
+        }
+    }
+}
 
 impl LxdCliAllocator {
     fn add_project(project: &str) -> Result<(), LxcError> {
@@ -125,36 +156,14 @@ impl LxdCliAllocator {
             .map(|_| ())
     }
 
-    fn find_project(project: &str, output: &Vec<u8>) -> Result<bool, LxcError> {
-        #[derive(serde::Deserialize, Debug)]
-        struct _LxcProject {
-            name: String,
-        }
-
-        let projects: Vec<_LxcProject> =
-            serde_json::from_slice(output).expect("cannot parse project JSON");
-
-        debug!("projects:\n{:?}", projects);
-
-        let found = projects.iter().find(|p| p.name == project).is_some();
-        debug!("project found? {}", found);
-        return Ok(found);
-    }
-
-    fn list_nodes() -> Result<Vec<String>, LxcError> {
-        #[derive(serde::Deserialize, Debug)]
-        struct _LxcInstance {
-            name: String,
-        }
-
+    fn list_nodes() -> Result<Vec<lxc::types::Instance>, LxcError> {
         LxcRunner::new()
             .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["list", "--format=json"])
             .and_then(|output| {
-                Ok(serde_json::from_slice::<Vec<_LxcInstance>>(&output)
+                Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
                     .expect("cannot parse instance list JSON"))
             })
-            .and_then(|v| Ok(v.iter().map(|e| e.name.clone()).collect()))
     }
 
     fn deallocate_by_name(name: &str) -> Result<(), LxcError> {
@@ -199,21 +208,41 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&args)
             .map(|_| ())
+
+        // TODO wait for node to become active
     }
 
     fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
-        LxcRunner::new()
-            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
-            .run(&["delete", "--force"])
-            .map(|_| ())
+        LxdCliAllocator::list_nodes().and_then(|instances| {
+            let res = instances.iter().find(|instance| {
+                instance.status == "Running"
+                    && instance
+                        .state
+                        .network
+                        .iter()
+                        .find(|(_, &ref iface)| {
+                            iface
+                                .addresses
+                                .iter()
+                                .find(|ifaceaddr| ifaceaddr.address == addr)
+                                .is_some()
+                        })
+                        .is_some()
+            });
+
+            match res {
+                None => Err(LxcError::NotFound),
+                Some(instance) => LxdCliAllocator::deallocate_by_name(&instance.name),
+            }
+        })
     }
 
     fn deallocate_all(&self) -> Result<(), LxcError> {
         let nodes = LxdCliAllocator::list_nodes()?;
         log::debug!("deallocate {} nodes: {:?}", nodes.len(), nodes);
 
-        for name in nodes {
-            LxdCliAllocator::deallocate_by_name(&name)?;
+        for node in nodes {
+            LxdCliAllocator::deallocate_by_name(&node.name)?;
         }
 
         Ok(())
@@ -257,7 +286,7 @@ pub struct LxdAllocator {
 }
 
 impl LxdAllocator {
-    pub fn allocate(&self, sysname: &str) -> Result<(), LxcError> {
+    pub fn allocate(&self, sysname: &str) -> Result<String, LxcError> {
         let sysconf = if let Some(sysconf) = self.conf.system.get(sysname) {
             sysconf
         } else {
@@ -268,14 +297,16 @@ impl LxdAllocator {
             return Err(err);
         }
 
-        self.backend.allocate(&LxdNodeDetails {
-            image: &sysconf.image,
-            cpu: sysconf.resources.cpu,
-            memory: 1024 * 1024 * 1024 * 2,
-            name: sysname,
-            root_size: 15 * 1024 * 1024 * 1024,
-            secure_boot: sysconf.secure_boot,
-        })
+        self.backend
+            .allocate(&LxdNodeDetails {
+                image: &sysconf.image,
+                cpu: sysconf.resources.cpu,
+                memory: 1024 * 1024 * 1024 * 2,
+                name: sysname,
+                root_size: 15 * 1024 * 1024 * 1024,
+                secure_boot: sysconf.secure_boot,
+            })
+            .and_then(|_| Ok(String::new()))
     }
 
     pub fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {

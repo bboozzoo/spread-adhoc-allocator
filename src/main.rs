@@ -25,7 +25,7 @@ fn main() {
         }
         "deallocate" => {
             let addr = args.next().expect("no address");
-            if let Err(err) = alloc.allocate(&addr) {
+            if let Err(err) = alloc.deallocate_by_addr(&addr) {
                 log::error!("cannot deallocate: {}", err)
             }
         }
