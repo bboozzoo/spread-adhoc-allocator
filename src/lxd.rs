@@ -6,6 +6,7 @@ use std::fmt;
 use std::io;
 use std::process::Command;
 use std::thread;
+use std::time::Instant;
 
 use log::debug;
 use serde;
@@ -206,37 +207,11 @@ impl LxdCliAllocator {
             _ => c,
         }))
     }
-}
 
-impl LxdAllocatorExecutor for LxdCliAllocator {
-    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxcError> {
-        let memory_arg = format!("limits.memory={}", node.memory);
-        let cpu_arg = format!("limits.cpu={}", node.cpu);
-        let secure_boot_arg = format!("security.secureboot={}", node.secure_boot);
-        let root_size_arg = format!("root,size={}", node.root_size);
-        let name = LxdCliAllocator::lxdfiy_name(node.name);
-        let args = vec![
-            "launch",
-            "--ephemeral",
-            "--vm",
-            "--config",
-            &memory_arg,
-            "--config",
-            &cpu_arg,
-            "--config",
-            &secure_boot_arg,
-            "--device",
-            &root_size_arg,
-            node.image,
-            &name,
-        ];
-
-        let res = LxcRunner::new()
-            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
-            .run(&args)
-            .map(|_| ());
-
+    fn wait_for_address(name: &str, timeout: time::Duration) -> Result<net::Ipv4Addr, LxcError> {
         let mut addr: Option<net::Ipv4Addr> = None;
+
+        let now = Instant::now();
 
         while addr.is_none() {
             log::debug!("waiting for address");
@@ -273,17 +248,51 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
                     break;
                 }
             }
+
+            if addr.is_none() && now.elapsed() > timeout {
+                return Err(LxcError::Allocate(io::Error::other(
+                    "timeout waiting for instance to obtain an address",
+                )));
+            }
         }
 
-        // TODO wait for node to become active
-        //
-        if let Err(err) = res {
-            return Err(err);
-        }
+        return Ok(addr.expect("address not set"));
+    }
+}
+
+impl LxdAllocatorExecutor for LxdCliAllocator {
+    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxcError> {
+        let memory_arg = format!("limits.memory={}", node.memory);
+        let cpu_arg = format!("limits.cpu={}", node.cpu);
+        let secure_boot_arg = format!("security.secureboot={}", node.secure_boot);
+        let root_size_arg = format!("root,size={}", node.root_size);
+        let name = LxdCliAllocator::lxdfiy_name(node.name);
+        let args = vec![
+            "launch",
+            "--ephemeral",
+            "--vm",
+            "--config",
+            &memory_arg,
+            "--config",
+            &cpu_arg,
+            "--config",
+            &secure_boot_arg,
+            "--device",
+            &root_size_arg,
+            node.image,
+            &name,
+        ];
+
+        LxcRunner::new()
+            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+            .run(&args)
+            .map(|_| ())?;
+
+        let addr = LxdCliAllocator::wait_for_address(&name, time::Duration::from_secs(60))?;
 
         Ok(LxdNodeAllocation {
             name: name,
-            addr: addr.expect("address is not set"),
+            addr: addr,
             ssh_port: 22,
         })
     }
