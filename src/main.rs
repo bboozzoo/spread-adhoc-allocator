@@ -19,8 +19,13 @@ fn main() {
     match action.as_ref() {
         "allocate" => {
             let sysname = args.next().expect("no system name");
-            if let Err(err) = alloc.allocate(&sysname) {
-                log::error!("cannot allocate: {}", err)
+            match alloc.allocate(&sysname) {
+                Ok(instance) => {
+                    println!("{}:{}", instance.addr, instance.ssh_port);
+                }
+                Err(err) => {
+                    log::error!("cannot allocate: {}", err)
+                }
             }
         }
         "deallocate" => {

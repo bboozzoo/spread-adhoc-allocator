@@ -1,8 +1,11 @@
+use core::net;
+use core::time;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::process::Command;
+use std::thread;
 
 use log::debug;
 use serde;
@@ -52,6 +55,12 @@ impl fmt::Display for LxcError {
     }
 }
 
+pub struct LxdNodeAllocation {
+    pub name: String,
+    pub addr: net::Ipv4Addr,
+    pub ssh_port: u32,
+}
+
 struct LxdNodeDetails<'a> {
     image: &'a str,
     name: &'a str,
@@ -62,7 +71,7 @@ struct LxdNodeDetails<'a> {
 }
 
 pub trait LxdAllocatorExecutor {
-    fn allocate(&self, node: &LxdNodeDetails) -> Result<(), LxcError>;
+    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxcError>;
     fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError>;
     fn deallocate_all(&self) -> Result<(), LxcError>;
     fn ensure_project(&self, project: &str) -> Result<(), LxcError>;
@@ -116,23 +125,23 @@ mod lxc {
     pub mod types {
         use std::collections::HashMap;
 
-        #[derive(serde::Deserialize, Debug)]
+        #[derive(serde::Deserialize, Debug, Clone)]
         pub struct NetworkAddress {
             pub family: String,
             pub address: String,
         }
 
-        #[derive(serde::Deserialize, Debug)]
+        #[derive(serde::Deserialize, Debug, Clone)]
         pub struct NetworkState {
             pub addresses: Vec<NetworkAddress>,
         }
 
-        #[derive(serde::Deserialize, Debug)]
+        #[derive(serde::Deserialize, Debug, Clone)]
         pub struct InstanceState {
             pub network: HashMap<String, NetworkState>,
         }
 
-        #[derive(serde::Deserialize, Debug)]
+        #[derive(serde::Deserialize, Debug, Clone)]
         pub struct Instance {
             pub name: String,
             pub state: InstanceState,
@@ -166,7 +175,25 @@ impl LxdCliAllocator {
             })
     }
 
+    fn list_node_by_name(name: &str) -> Result<lxc::types::Instance, LxcError> {
+        let nodes = LxcRunner::new()
+            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+            .run(&["list", "--format=json", name])
+            .and_then(|output| {
+                Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
+                    .expect("cannot parse instance JSON"))
+            })?;
+
+        if nodes.len() == 0 {
+            Err(LxcError::NotFound)
+        } else {
+            Ok(nodes[0].clone())
+        }
+    }
+
     fn deallocate_by_name(name: &str) -> Result<(), LxcError> {
+        log::debug!("deallocate by name '{}'", name);
+
         LxcRunner::new()
             .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["delete", "--force", name])
@@ -182,7 +209,7 @@ impl LxdCliAllocator {
 }
 
 impl LxdAllocatorExecutor for LxdCliAllocator {
-    fn allocate(&self, node: &LxdNodeDetails) -> Result<(), LxcError> {
+    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxcError> {
         let memory_arg = format!("limits.memory={}", node.memory);
         let cpu_arg = format!("limits.cpu={}", node.cpu);
         let secure_boot_arg = format!("security.secureboot={}", node.secure_boot);
@@ -204,15 +231,66 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             &name,
         ];
 
-        LxcRunner::new()
+        let res = LxcRunner::new()
             .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&args)
-            .map(|_| ())
+            .map(|_| ());
+
+        let mut addr: Option<net::Ipv4Addr> = None;
+
+        while addr.is_none() {
+            log::debug!("waiting for address");
+
+            thread::sleep(time::Duration::from_millis(500));
+
+            let instance = LxdCliAllocator::list_node_by_name(&name)?;
+            if instance.status != "Running" {
+                log::debug!("not yet running, in state {}", instance.status);
+                continue;
+            }
+
+            for (&ref ifname, &ref ifstate) in instance.state.network.iter() {
+                if ifname == "lo" {
+                    continue;
+                }
+
+                for &ref ifaceaddr in ifstate.addresses.iter() {
+                    if ifaceaddr.family != "inet" {
+                        continue;
+                    }
+
+                    log::debug!("found address {}", ifaceaddr.address);
+
+                    if let Ok(parsed) = ifaceaddr.address.parse::<net::Ipv4Addr>() {
+                        addr = Some(parsed);
+                        break;
+                    } else {
+                        log::debug!("cannot parse address");
+                    }
+                }
+
+                if addr.is_some() {
+                    break;
+                }
+            }
+        }
 
         // TODO wait for node to become active
+        //
+        if let Err(err) = res {
+            return Err(err);
+        }
+
+        Ok(LxdNodeAllocation {
+            name: name,
+            addr: addr.expect("address is not set"),
+            ssh_port: 22,
+        })
     }
 
     fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
+        log::debug!("deallocate by address '{}'", addr);
+
         let nodes = LxdCliAllocator::list_nodes()?;
 
         let mut name: Option<String> = None;
@@ -296,7 +374,7 @@ pub struct LxdAllocator {
 }
 
 impl LxdAllocator {
-    pub fn allocate(&self, sysname: &str) -> Result<String, LxcError> {
+    pub fn allocate(&self, sysname: &str) -> Result<LxdNodeAllocation, LxcError> {
         let sysconf = if let Some(sysconf) = self.conf.system.get(sysname) {
             sysconf
         } else {
@@ -307,16 +385,14 @@ impl LxdAllocator {
             return Err(err);
         }
 
-        self.backend
-            .allocate(&LxdNodeDetails {
-                image: &sysconf.image,
-                cpu: sysconf.resources.cpu,
-                memory: 1024 * 1024 * 1024 * 2,
-                name: sysname,
-                root_size: 15 * 1024 * 1024 * 1024,
-                secure_boot: sysconf.secure_boot,
-            })
-            .and_then(|_| Ok(String::new()))
+        self.backend.allocate(&LxdNodeDetails {
+            image: &sysconf.image,
+            cpu: sysconf.resources.cpu,
+            memory: 1024 * 1024 * 1024 * 2,
+            name: sysname,
+            root_size: 15 * 1024 * 1024 * 1024,
+            secure_boot: sysconf.secure_boot,
+        })
     }
 
     pub fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
