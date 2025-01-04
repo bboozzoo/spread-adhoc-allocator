@@ -224,12 +224,12 @@ impl LxdCliAllocator {
                 continue;
             }
 
-            for (&ref ifname, &ref ifstate) in instance.state.network.iter() {
+            for (ifname, ifstate) in instance.state.network.iter() {
                 if ifname == "lo" {
                     continue;
                 }
 
-                for &ref ifaceaddr in ifstate.addresses.iter() {
+                for ifaceaddr in ifstate.addresses.iter() {
                     if ifaceaddr.family != "inet" {
                         continue;
                     }
@@ -312,7 +312,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
                 .state
                 .network
                 .iter()
-                .find(|(_, &ref iface)| {
+                .find(|(_, iface)| {
                     iface
                         .addresses
                         .iter()
