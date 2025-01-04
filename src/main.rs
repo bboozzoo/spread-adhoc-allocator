@@ -19,7 +19,15 @@ fn main() -> Result<(), ()> {
     match action.as_ref() {
         "allocate" => {
             let sysname = args.next().expect("no system name");
-            match alloc.allocate(&sysname) {
+            let user = args.next().expect("no user name");
+            let password = args.next().expect("no password");
+            match alloc.allocate(
+                &sysname,
+                lxd::UserConfig {
+                    user: &user,
+                    password: &password,
+                },
+            ) {
                 Ok(instance) => {
                     println!("{}:{}", instance.addr, instance.ssh_port);
                     Ok(())

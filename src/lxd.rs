@@ -62,13 +62,14 @@ pub struct LxdNodeAllocation {
     pub ssh_port: u32,
 }
 
-struct LxdNodeDetails<'a> {
+pub struct LxdNodeDetails<'a> {
     image: &'a str,
     name: &'a str,
     cpu: u32,
     memory: u64,
     root_size: u64,
     secure_boot: bool,
+    provision_steps: &'a [String],
 }
 
 pub trait LxdAllocatorExecutor {
@@ -94,9 +95,8 @@ impl<'a> LxcRunner<'a> {
         }
     }
 
-    fn with_scope(&mut self, scope: LxcRunnerScope<'a>) -> &mut Self {
-        self.scope = scope;
-        self
+    fn with_scope(scope: LxcRunnerScope<'a>) -> Self {
+        LxcRunner { scope }
     }
 
     fn run(&self, args: &[&str]) -> Result<Vec<u8>, LxcError> {
@@ -167,8 +167,7 @@ impl LxdCliAllocator {
     }
 
     fn list_nodes() -> Result<Vec<lxc::types::Instance>, LxcError> {
-        LxcRunner::new()
-            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["list", "--format=json"])
             .and_then(|output| {
                 Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
@@ -177,8 +176,7 @@ impl LxdCliAllocator {
     }
 
     fn list_node_by_name(name: &str) -> Result<lxc::types::Instance, LxcError> {
-        let nodes = LxcRunner::new()
-            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        let nodes = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["list", "--format=json", name])
             .and_then(|output| {
                 Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
@@ -195,8 +193,7 @@ impl LxdCliAllocator {
     fn deallocate_by_name(name: &str) -> Result<(), LxcError> {
         log::debug!("deallocate by name '{}'", name);
 
-        LxcRunner::new()
-            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["delete", "--force", name])
             .map(|_| ())
     }
@@ -258,6 +255,17 @@ impl LxdCliAllocator {
 
         return Ok(addr.expect("address not set"));
     }
+
+    fn provision(name: &str, steps: &[String]) -> Result<(), LxcError> {
+        log::debug!("provision {}", name);
+
+        let cli = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME));
+        for step in steps {
+            log::debug!("provisioning step:\n{}", step);
+            cli.run(&["exec", name, "--", "/bin/bash", "-c", step])?;
+        }
+        Ok(())
+    }
 }
 
 impl LxdAllocatorExecutor for LxdCliAllocator {
@@ -283,12 +291,13 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             &name,
         ];
 
-        LxcRunner::new()
-            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&args)
             .map(|_| ())?;
 
         let addr = LxdCliAllocator::wait_for_address(&name, time::Duration::from_secs(60))?;
+
+        LxdCliAllocator::provision(&name, node.provision_steps)?;
 
         Ok(LxdNodeAllocation {
             name: name,
@@ -351,8 +360,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             name: String,
         }
 
-        LxcRunner::new()
-            .with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["project", "list", "--format=json"])
             .and_then(|output| {
                 let found = serde_json::from_slice::<Vec<_LxcProject>>(&output)
@@ -382,17 +390,43 @@ pub struct LxdAllocator {
     conf: LxdBackendConfig,
 }
 
+pub struct UserConfig<'a> {
+    pub user: &'a str,
+    pub password: &'a str,
+}
+
 impl LxdAllocator {
-    pub fn allocate(&self, sysname: &str) -> Result<LxdNodeAllocation, LxcError> {
+    pub fn allocate(
+        &self,
+        sysname: &str,
+        user_config: UserConfig,
+    ) -> Result<LxdNodeAllocation, LxcError> {
         let sysconf = if let Some(sysconf) = self.conf.system.get(sysname) {
             sysconf
         } else {
             return Err(LxcError::Allocate(io::Error::other("system not found")));
         };
 
-        if let Err(err) = self.backend.ensure_project(LXD_PROJECT_NAME) {
-            return Err(err);
-        }
+        let steps = if let Some(setup_steps) = sysconf.setup_steps.as_ref() {
+            if let Some(steps) = self.conf.setup.get(setup_steps) {
+                steps
+            } else {
+                return Err(LxcError::Other(io::Error::other("setup steps not found")));
+            }
+        } else {
+            log::warn!("no setup steps declared for this system");
+            &vec![]
+        };
+
+        // TODO validate user & password
+        let mut steps = steps.clone();
+
+        steps.push(format!(
+            "echo {}:{} | chpasswd",
+            user_config.user, user_config.password
+        ));
+
+        self.backend.ensure_project(LXD_PROJECT_NAME)?;
 
         self.backend.allocate(&LxdNodeDetails {
             image: &sysconf.image,
@@ -401,6 +435,7 @@ impl LxdAllocator {
             name: sysname,
             root_size: 15 * 1024 * 1024 * 1024,
             secure_boot: sysconf.secure_boot,
+            provision_steps: &steps,
         })
     }
 
@@ -424,7 +459,7 @@ struct LxdNodeResources {
 struct LxdNodeConfig {
     image: String,
     #[serde(rename = "setup-steps")]
-    setup_steps: String,
+    setup_steps: Option<String>,
     resources: LxdNodeResources,
     #[serde(rename = "secure-boot", default)]
     secure_boot: bool,
