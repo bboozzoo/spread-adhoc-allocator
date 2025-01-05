@@ -407,9 +407,9 @@ impl LxdAllocator {
         self.backend.allocate(&LxdNodeDetails {
             image: &sysconf.image,
             cpu: sysconf.resources.cpu,
-            memory: 1024 * 1024 * 1024 * 2,
+            memory: sysconf.resources.mem.as_u64(),
             name: sysname,
-            root_size: 15 * 1024 * 1024 * 1024,
+            root_size: sysconf.resources.size.as_u64(),
             secure_boot: sysconf.secure_boot,
             provision_steps: &steps,
         })
@@ -426,9 +426,9 @@ impl LxdAllocator {
 
 #[derive(serde::Deserialize, Debug)]
 struct LxdNodeResources {
-    mem: String,
+    mem: bytesize::ByteSize,
     cpu: u32,
-    size: String,
+    size: bytesize::ByteSize,
 }
 
 #[derive(serde::Deserialize, Debug)]
