@@ -1,13 +1,16 @@
 use std::env;
 use std::fs;
 
+use anyhow::Context;
 use log;
 use simple_logger;
 
 mod config;
 mod lxd;
 
-fn main() -> Result<(), ()> {
+use anyhow::{anyhow, Result};
+
+fn main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Debug).unwrap();
 
     let mut args = env::args().skip(1);
@@ -21,37 +24,30 @@ fn main() -> Result<(), ()> {
             let sysname = args.next().expect("no system name");
             let user = args.next().expect("no user name");
             let password = args.next().expect("no password");
-            match alloc.allocate(
-                &sysname,
-                lxd::UserConfig {
-                    user: &user,
-                    password: &password,
-                },
-            ) {
+            let res = alloc
+                .allocate(
+                    &sysname,
+                    lxd::UserConfig {
+                        user: &user,
+                        password: &password,
+                    },
+                )
+                .context("cannot allocate");
+            match res {
                 Ok(instance) => {
                     println!("{}:{}", instance.addr, instance.ssh_port);
                     Ok(())
                 }
-                Err(err) => {
-                    log::error!("cannot allocate: {}", err);
-                    Err(())
-                }
+                Err(err) => Err(err),
             }
         }
         "deallocate" => {
             let addr = args.next().expect("no address");
-            alloc.deallocate_by_addr(&addr).map_err(|err| {
-                log::error!("cannot deallocate: {}", err);
-                ()
-            })
+            alloc
+                .deallocate_by_addr(&addr)
+                .with_context(|| format!("cannot deallocate system with address {}", addr))
         }
-        "cleanup" => alloc.deallocate_all().map_err(|err| {
-            log::error!("cannot deallocate all systems: {}", err);
-            ()
-        }),
-        _ => {
-            log::error!("unknown action {}", action);
-            Err(())
-        }
+        "cleanup" => alloc.deallocate_all().context("cannot cleanup all nodes"),
+        _ => Err(anyhow!("unknown action {}", action)),
     }
 }
