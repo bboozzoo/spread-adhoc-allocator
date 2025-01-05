@@ -359,7 +359,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
     }
 }
 
-const LXD_PROJECT_NAME: &'static str = "spread-adhoc";
+const LXD_PROJECT_NAME: &str = "spread-adhoc";
 
 pub struct LxdAllocator {
     backend: Box<dyn LxdAllocatorExecutor>,
