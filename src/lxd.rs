@@ -79,6 +79,14 @@ impl<'a> LxcRunner<'a> {
 
         cmd.args(args);
 
+        log::trace!(
+            "running lxc with: {:?}",
+            cmd.get_args()
+                .by_ref()
+                .map(|a| a.to_string_lossy())
+                .collect::<Vec<_>>()
+        );
+
         let res = match cmd.output() {
             Ok(output) => output,
             Err(err) => {

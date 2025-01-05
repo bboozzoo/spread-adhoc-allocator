@@ -11,13 +11,21 @@ mod lxd;
 use anyhow::{anyhow, Result};
 
 fn main() -> Result<()> {
-    simple_logger::init_with_level(log::Level::Debug).unwrap();
+    simple_logger::init_with_level(log::Level::Trace).unwrap();
+
+    let conf_name = lxd::config_file_name();
 
     let mut args = env::args().skip(1);
     let action = args.next().expect("no action");
-    let cfg_path = config::locate(lxd::config_file_name()).expect("config file not found");
-    let cfg = fs::File::open(cfg_path).expect("cannot open config file");
-    let alloc = lxd::allocator_with_config(cfg).expect("cannot create allocator");
+
+    let cfg_path = config::locate(lxd::config_file_name())
+        .with_context(|| format!("cannot find config file {}", conf_name))?;
+
+    log::debug!("loading config from {}", cfg_path.to_string_lossy());
+
+    let cfg = fs::File::open(cfg_path).context("cannot open config file")?;
+
+    let alloc = lxd::allocator_with_config(cfg).context("cannot set up allocator")?;
 
     match action.as_ref() {
         "allocate" => {
