@@ -1,8 +1,6 @@
 use core::net;
 use core::time;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 use std::io;
 use std::process::Command;
 use std::thread;
@@ -11,43 +9,22 @@ use std::time::Instant;
 use log::debug;
 use serde;
 use serde_yml;
+use thiserror;
 
-#[derive(Debug, Clone)]
-pub struct LxcCommandError {
-    stderr: Vec<u8>,
-    exit_code: i32,
-}
-
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum LxcError {
+    #[error("cannot start lxc: {0}")]
     Start(io::Error),
-    Execution(LxcCommandError),
+    #[error("lxc command exited with status {exit_code}, stderr:\n{stderr}")]
+    Execution { stderr: String, exit_code: i32 },
+    #[error("error: {0}")]
     Other(io::Error),
+    #[error("cannot load configuration: {0}")]
     Config(serde_yml::Error),
+    #[error("cannot allocate system: {0}")]
     Allocate(io::Error),
-    NotFound,
-}
-
-impl Error for LxcError {}
-
-impl fmt::Display for LxcError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            LxcError::Execution(eerr) => {
-                write!(
-                    f,
-                    "lxc command exited with status {}, stderr:\n{}",
-                    eerr.exit_code,
-                    String::from_utf8_lossy(&eerr.stderr)
-                )
-            }
-            LxcError::Start(ioerr) => ioerr.fmt(f),
-            LxcError::Other(ioerr) => ioerr.fmt(f),
-            LxcError::Config(srerr) => srerr.fmt(f),
-            LxcError::Allocate(ioerr) => ioerr.fmt(f),
-            LxcError::NotFound => write!(f, "entry not found"),
-        }
-    }
+    #[error("{0} not found")]
+    NotFound(String),
 }
 
 pub struct LxdNodeAllocation {
@@ -110,10 +87,10 @@ impl<'a> LxcRunner<'a> {
         };
 
         if !res.status.success() {
-            return Err(LxcError::Execution(LxcCommandError {
-                stderr: res.stderr,
+            return Err(LxcError::Execution {
+                stderr: String::from_utf8_lossy(&res.stderr).trim().to_string(),
                 exit_code: res.status.code().unwrap_or(255),
-            }));
+            });
         }
         return Ok(res.stdout);
     }
@@ -183,7 +160,7 @@ impl LxdCliAllocator {
             })?;
 
         if nodes.len() == 0 {
-            Err(LxcError::NotFound)
+            Err(LxcError::NotFound(name.to_string()))
         } else {
             Ok(nodes[0].clone())
         }
@@ -338,7 +315,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
         if let Some(name) = name {
             LxdCliAllocator::deallocate_by_name(&name)
         } else {
-            Err(LxcError::NotFound)
+            Err(LxcError::NotFound(addr.to_string()))
         }
     }
 
