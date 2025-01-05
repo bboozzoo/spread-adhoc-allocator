@@ -432,11 +432,36 @@ impl LxdAllocator {
     }
 }
 
+fn default_mem() -> bytesize::ByteSize {
+    bytesize::ByteSize(bytesize::gib(2 as u64))
+}
+
+fn default_cpu() -> u32 {
+    2
+}
+
+fn default_root_size() -> bytesize::ByteSize {
+    bytesize::ByteSize(bytesize::gib(10 as u64))
+}
+
 #[derive(serde::Deserialize, Debug)]
 struct LxdNodeResources {
+    #[serde(default = "default_mem")]
     mem: bytesize::ByteSize,
+    #[serde(default = "default_cpu")]
     cpu: u32,
+    #[serde(default = "default_root_size")]
     size: bytesize::ByteSize,
+}
+
+impl Default for LxdNodeResources {
+    fn default() -> Self {
+        LxdNodeResources {
+            mem: default_mem(),
+            cpu: default_cpu(),
+            size: default_root_size(),
+        }
+    }
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -444,6 +469,7 @@ struct LxdNodeConfig {
     image: String,
     #[serde(rename = "setup-steps")]
     setup_steps: Option<String>,
+    #[serde(default)]
     resources: LxdNodeResources,
     #[serde(rename = "secure-boot", default)]
     secure_boot: bool,
