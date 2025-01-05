@@ -30,12 +30,6 @@ pub enum LxcError {
 
 impl Error for LxcError {}
 
-impl From<io::Error> for LxcError {
-    fn from(error: io::Error) -> Self {
-        LxcError::Start(error)
-    }
-}
-
 impl fmt::Display for LxcError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -108,7 +102,12 @@ impl<'a> LxcRunner<'a> {
 
         cmd.args(args);
 
-        let res = cmd.output()?;
+        let res = match cmd.output() {
+            Ok(output) => output,
+            Err(err) => {
+                return Err(LxcError::Start(err));
+            }
+        };
 
         if !res.status.success() {
             return Err(LxcError::Execution(LxcCommandError {
