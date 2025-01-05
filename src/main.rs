@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     let conf_name = lxd::config_file_name();
 
     let mut args = env::args().skip(1);
-    let action = args.next().expect("no action");
+    let action = args.next().context("no action")?;
 
     let cfg_path = config::locate(lxd::config_file_name())
         .with_context(|| format!("cannot find config file {}", conf_name))?;
@@ -29,9 +29,9 @@ fn main() -> Result<()> {
 
     match action.as_ref() {
         "allocate" => {
-            let sysname = args.next().expect("no system name");
-            let user = args.next().expect("no user name");
-            let password = args.next().expect("no password");
+            let sysname = args.next().context("no system name")?;
+            let user = args.next().context("no user name")?;
+            let password = args.next().context("no password")?;
             let res = alloc
                 .allocate(
                     &sysname,
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
             }
         }
         "deallocate" => {
-            let addr = args.next().expect("no address");
+            let addr = args.next().context("no address")?;
             alloc
                 .deallocate_by_addr(&addr)
                 .with_context(|| format!("cannot deallocate system with address {}", addr))
