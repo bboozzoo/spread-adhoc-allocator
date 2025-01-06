@@ -49,7 +49,14 @@ fn main() -> Result<()> {
             }
         }
         "deallocate" => {
-            let addr = args.next().context("no address")?;
+            let addr_port = args.next().context("no address")?;
+            let sp: Vec<&str> = addr_port.split(":").collect();
+            if sp.len() != 2 {
+                return Err(anyhow!("invalid address, expected <addr>:<port>"));
+            }
+
+            let addr = sp.get(0).unwrap();
+
             lxd::LxdAllocator::new()
                 .deallocate_by_addr(&addr)
                 .with_context(|| format!("cannot deallocate system with address {}", addr))
