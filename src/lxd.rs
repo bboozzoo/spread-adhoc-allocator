@@ -430,6 +430,23 @@ impl LxdAllocator {
     pub fn deallocate_all(&self) -> Result<(), LxcError> {
         self.backend.deallocate_all()
     }
+
+    pub fn new() -> Self {
+        LxdAllocator {
+            conf: LxdBackendConfig {
+                setup: HashMap::new(),
+                system: HashMap::new(),
+            },
+            backend: Box::new(LxdCliAllocator {}),
+        }
+    }
+
+    fn new_with_config(conf: LxdBackendConfig) -> Self {
+        LxdAllocator {
+            conf: conf,
+            backend: Box::new(LxdCliAllocator {}),
+        }
+    }
 }
 
 fn default_mem() -> bytesize::ByteSize {
@@ -488,10 +505,7 @@ where
     let conf: LxdBackendConfig = serde_yml::from_reader(cfg).map_err(|e| LxcError::Config(e))?;
     log::debug!("config: {:?}", conf);
 
-    Ok(LxdAllocator {
-        conf: conf,
-        backend: Box::new(LxdCliAllocator {}),
-    })
+    Ok(LxdAllocator::new_with_config(conf))
 }
 
 pub fn config_file_name() -> &'static str {
