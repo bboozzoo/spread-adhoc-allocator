@@ -1,0 +1,4 @@
+summary: Example task
+
+execute:
+  echo "hello from spread"

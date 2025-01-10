@@ -1,0 +1,42 @@
+project: spread-adhoc-allocator
+
+path: /home/project
+
+backends:
+  adhoc-lxd:
+    type: adhoc
+    allocate: |
+      address="$(spread-adhoc-allocator allocate \
+                 "$SPREAD_SYSTEM" \
+                 ubuntu \
+                 "$SPREAD_SYSTEM_PASSWORD")"
+            ADDRESS "$address"
+    discard: |
+      spread-adhoc-allocator deallocate "$SPREAD_SYSTEM_ADDRESS"
+    systems:
+      - ubuntu-25.04-64:
+          username: ubuntu
+          password: ubuntu
+      - ubuntu-24.10-64:
+          username: ubuntu
+          password: ubuntu
+      - ubuntu-24.04-64:
+          username: ubuntu
+          password: ubuntu
+      - ubuntu-22.04-64:
+          username: ubuntu
+          password: ubuntu
+      - ubuntu-20.04-64:
+          username: ubuntu
+          password: ubuntu
+      - ubuntu-core-24-64:
+          username: ubuntu
+          password: ubuntu
+
+exclude:
+  - .git
+  - target
+
+suites:
+  tests/:
+    summary: Example spread tasks
