@@ -7,6 +7,7 @@ use std::thread;
 use std::time::Instant;
 
 use log::debug;
+use rand::random;
 use serde;
 use serde_yml;
 use thiserror;
@@ -410,13 +411,15 @@ impl LxdAllocator {
             user_config.user, user_config.password
         ));
 
+        let name = format!("{}-{}", sysname, random::<u32>());
+
         self.backend.ensure_project(LXD_PROJECT_NAME)?;
 
         self.backend.allocate(&LxdNodeDetails {
             image: &sysconf.image,
             cpu: sysconf.resources.cpu,
             memory: sysconf.resources.mem.as_u64(),
-            name: sysname,
+            name: &name,
             root_size: sysconf.resources.size.as_u64(),
             secure_boot: sysconf.secure_boot,
             provision_steps: &steps,
