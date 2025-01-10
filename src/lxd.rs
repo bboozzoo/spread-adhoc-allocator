@@ -128,7 +128,7 @@ mod lxc {
 
         #[derive(serde::Deserialize, Debug, Clone)]
         pub struct InstanceState {
-            pub network: HashMap<String, NetworkState>,
+            pub network: Option<HashMap<String, NetworkState>>,
         }
 
         #[derive(serde::Deserialize, Debug, Clone)]
@@ -210,7 +210,7 @@ impl LxdCliAllocator {
                 continue;
             }
 
-            for (ifname, ifstate) in instance.state.network.iter() {
+            for (ifname, ifstate) in instance.state.network.unwrap_or(HashMap::new()).iter() {
                 if ifname == "lo" {
                     continue;
                 }
@@ -309,6 +309,8 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             let has_match = instance
                 .state
                 .network
+                .as_ref()
+                .unwrap_or(&HashMap::new())
                 .iter()
                 .find(|(_, iface)| {
                     iface
