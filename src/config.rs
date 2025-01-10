@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2024 Maciej Borzecki <maciek.borzecki@gmail.com>
+//
+// SPDX-License-Identifier: MIT
+
 use std::env;
 use std::fs;
 use std::io::Error;
