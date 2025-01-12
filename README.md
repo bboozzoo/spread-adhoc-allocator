@@ -13,4 +13,3 @@ example configuration of the LXD backend. Additionally, the
 
 🚧 TODO:
  - [ ] integrate [image-garden](https://gitlab.com/zygoon/image-garden)
- - [ ] add proper cli --help
