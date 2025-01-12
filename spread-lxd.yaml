@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2024 Maciej Borzecki <maciek.borzecki@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 # Example configuration for LXD adhoc allocator.
 
 # trivial grouping for resource definitions reused by all systems
