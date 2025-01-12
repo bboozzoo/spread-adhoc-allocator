@@ -38,7 +38,7 @@ fn main() -> Result<()> {
             let res = alloc
                 .allocate(
                     &sysname,
-                    lxd::UserConfig {
+                    lxd::RemoteUserAccessConfig {
                         user: &user,
                         password: &password,
                     },

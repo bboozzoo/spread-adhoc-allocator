@@ -11,6 +11,8 @@ use log;
 
 const SPREAD_CONF_NAME: &'static str = "spread.yaml";
 
+/// Locates the configuration file with a given which is assumed to exist in the
+/// same directory as spread.yaml.
 pub fn locate(name: &str) -> Result<PathBuf, Error> {
     let start_dir = &env::current_dir().and_then(|p| fs::canonicalize(p))?;
     let mut dir = Some(Path::new(start_dir));

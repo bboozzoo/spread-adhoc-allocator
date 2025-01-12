@@ -16,28 +16,29 @@ use serde;
 use serde_yml;
 use thiserror;
 
+/// Wraps LXD executor errors.
 #[derive(thiserror::Error, Debug)]
-pub enum LxcError {
-    #[error("cannot start lxc: {0}")]
-    Start(io::Error),
-    #[error("lxc command exited with status {exit_code}, stderr:\n{stderr}")]
-    Execution { stderr: String, exit_code: i32 },
-    #[error("error: {0}")]
-    Other(io::Error),
+pub enum LxdError {
+    #[error("cannot execute operation: {0}")]
+    Executor(String),
     #[error("cannot load configuration: {0}")]
     Config(serde_yml::Error),
     #[error("cannot allocate system: {0}")]
-    Allocate(io::Error),
-    #[error("{0} not found")]
+    Allocate(String),
+    #[error("cannot deallocate system: {0}")]
+    Deallocate(String),
+    #[error("{0}")]
     NotFound(String),
 }
 
+/// Describes an allocate lxd node.
 pub struct LxdNodeAllocation {
     pub name: String,
     pub addr: net::Ipv4Addr,
     pub ssh_port: u32,
 }
 
+/// Carries details of a node to allocate.
 pub struct LxdNodeDetails<'a> {
     image: &'a str,
     name: &'a str,
@@ -48,26 +49,44 @@ pub struct LxdNodeDetails<'a> {
     provision_steps: &'a [String],
 }
 
+/// An executor for allocating nodes using LXD.
 pub trait LxdAllocatorExecutor {
-    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxcError>;
-    fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError>;
-    fn deallocate_all(&self) -> Result<(), LxcError>;
-    fn ensure_project(&self, project: &str) -> Result<(), LxcError>;
+    /// Allocate a node with given confuguration.
+    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxdError>;
+    /// Deallocate a node with given address.
+    fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxdError>;
+    /// Deallocate all nodes.
+    fn deallocate_all(&self) -> Result<(), LxdError>;
+    /// Ensure a given LXD project exists.
+    fn ensure_project(&self, project: &str) -> Result<(), LxdError>;
 }
 
+/// Scope for lxc commands.
 enum LxcRunnerScope<'a> {
-    Global,
+    /// Default project.
+    Default,
+    /// Specific project.
     Project(&'a str),
 }
 
+/// Wrapper for runing lxc commands.
 struct LxcRunner<'a> {
     scope: LxcRunnerScope<'a>,
+}
+
+/// Wraps lxc command runner errors.
+#[derive(thiserror::Error, Debug)]
+pub enum LxcRunnerError {
+    #[error("cannot start lxc: {0}")]
+    Start(io::Error),
+    #[error("lxc command exited with status {exit_code}, stderr:\n{stderr}")]
+    Execution { stderr: String, exit_code: i32 },
 }
 
 impl<'a> LxcRunner<'a> {
     fn new() -> Self {
         LxcRunner {
-            scope: LxcRunnerScope::Global,
+            scope: LxcRunnerScope::Default,
         }
     }
 
@@ -75,7 +94,8 @@ impl<'a> LxcRunner<'a> {
         LxcRunner { scope }
     }
 
-    fn run(&self, args: &[&str]) -> Result<Vec<u8>, LxcError> {
+    /// Runs a command returning its output (stdout).
+    fn run(&self, args: &[&str]) -> Result<Vec<u8>, LxcRunnerError> {
         let mut cmd = Command::new("lxc");
         if let LxcRunnerScope::Project(prj) = &self.scope {
             cmd.arg("--project");
@@ -95,12 +115,12 @@ impl<'a> LxcRunner<'a> {
         let res = match cmd.output() {
             Ok(output) => output,
             Err(err) => {
-                return Err(LxcError::Start(err));
+                return Err(LxcRunnerError::Start(err));
             }
         };
 
         if !res.status.success() {
-            return Err(LxcError::Execution {
+            return Err(LxcRunnerError::Execution {
                 stderr: String::from_utf8_lossy(&res.stderr).trim().to_string(),
                 exit_code: res.status.code().unwrap_or(255),
             });
@@ -109,6 +129,7 @@ impl<'a> LxcRunner<'a> {
     }
 }
 
+/// Lxd node allocator which uses 'lxc' command.
 struct LxdCliAllocator;
 
 mod lxc {
@@ -140,8 +161,25 @@ mod lxc {
     }
 }
 
+/// Wraps lxc backend executor errors.
+#[derive(thiserror::Error, Debug)]
+pub enum LxcCliAllocatorError {
+    #[error("cannot add project: {0}")]
+    AddProject(String),
+    #[error("cannot list nodes: {0}")]
+    ListNodes(String),
+    #[error("cannot find node")]
+    NodeNotFound,
+    #[error("cannot delete node: {0}")]
+    DeleteNode(String),
+    #[error("cannot obtain address")]
+    AddressTimeout,
+    #[error("cannot provision node: {0}")]
+    Provision(String),
+}
+
 impl LxdCliAllocator {
-    fn add_project(project: &str) -> Result<(), LxcError> {
+    fn add_project(project: &str) -> Result<(), LxcCliAllocatorError> {
         LxcRunner::new()
             .run(&[
                 "project",
@@ -153,37 +191,41 @@ impl LxdCliAllocator {
                 "features.profiles=false",
             ])
             .map(|_| ())
+            .map_err(|e| LxcCliAllocatorError::AddProject(e.to_string()))
     }
 
-    fn list_nodes() -> Result<Vec<lxc::types::Instance>, LxcError> {
+    fn list_nodes() -> Result<Vec<lxc::types::Instance>, LxcCliAllocatorError> {
         LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["list", "--format=json"])
+            .map_err(|e| LxcCliAllocatorError::ListNodes(e.to_string()))
             .and_then(|output| {
                 Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
                     .expect("cannot parse instance list JSON"))
             })
     }
 
-    fn list_node_by_name(name: &str) -> Result<lxc::types::Instance, LxcError> {
+    fn list_node_by_name(name: &str) -> Result<lxc::types::Instance, LxcCliAllocatorError> {
         let nodes = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["list", "--format=json", name])
+            .map_err(|e| LxcCliAllocatorError::ListNodes(e.to_string()))
             .and_then(|output| {
                 Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
                     .expect("cannot parse instance JSON"))
             })?;
 
         if nodes.len() == 0 {
-            Err(LxcError::NotFound(name.to_string()))
+            Err(LxcCliAllocatorError::NodeNotFound)
         } else {
             Ok(nodes[0].clone())
         }
     }
 
-    fn deallocate_by_name(name: &str) -> Result<(), LxcError> {
+    fn deallocate_by_name(name: &str) -> Result<(), LxcCliAllocatorError> {
         log::debug!("deallocate by name '{}'", name);
 
         LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["delete", "--force", name])
+            .map_err(|e| LxcCliAllocatorError::DeleteNode(e.to_string()))
             .map(|_| ())
     }
 
@@ -194,7 +236,10 @@ impl LxdCliAllocator {
         }))
     }
 
-    fn wait_for_address(name: &str, timeout: time::Duration) -> Result<net::Ipv4Addr, LxcError> {
+    fn wait_for_address(
+        name: &str,
+        timeout: time::Duration,
+    ) -> Result<net::Ipv4Addr, LxcCliAllocatorError> {
         let mut addr: Option<net::Ipv4Addr> = None;
 
         let now = Instant::now();
@@ -236,29 +281,28 @@ impl LxdCliAllocator {
             }
 
             if addr.is_none() && now.elapsed() > timeout {
-                return Err(LxcError::Allocate(io::Error::other(
-                    "timeout waiting for instance to obtain an address",
-                )));
+                return Err(LxcCliAllocatorError::AddressTimeout);
             }
         }
 
         return Ok(addr.expect("address not set"));
     }
 
-    fn provision(name: &str, steps: &[String]) -> Result<(), LxcError> {
+    fn provision(name: &str, steps: &[String]) -> Result<(), LxcCliAllocatorError> {
         log::debug!("provision {}", name);
 
         let cli = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME));
         for step in steps {
             log::debug!("provisioning step:\n{}", step);
-            cli.run(&["exec", name, "--", "/bin/bash", "-c", step])?;
+            cli.run(&["exec", name, "--", "/bin/bash", "-c", step])
+                .map_err(|e| LxcCliAllocatorError::Provision(e.to_string()))?;
         }
         Ok(())
     }
 }
 
 impl LxdAllocatorExecutor for LxdCliAllocator {
-    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxcError> {
+    fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxdError> {
         let memory_arg = format!("limits.memory={}", node.memory);
         let cpu_arg = format!("limits.cpu={}", node.cpu);
         let secure_boot_arg = format!("security.secureboot={}", node.secure_boot);
@@ -282,11 +326,14 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
 
         LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&args)
+            .map_err(|e| LxdError::Allocate(e.to_string()))
             .map(|_| ())?;
 
-        let addr = LxdCliAllocator::wait_for_address(&name, time::Duration::from_secs(60))?;
+        let addr = LxdCliAllocator::wait_for_address(&name, time::Duration::from_secs(60))
+            .map_err(|e| LxdError::Allocate(e.to_string()))?;
 
-        LxdCliAllocator::provision(&name, node.provision_steps)?;
+        LxdCliAllocator::provision(&name, node.provision_steps)
+            .map_err(|e| LxdError::Allocate(e.to_string()))?;
 
         Ok(LxdNodeAllocation {
             name: name,
@@ -295,10 +342,11 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
         })
     }
 
-    fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
+    fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxdError> {
         log::debug!("deallocate by address '{}'", addr);
 
-        let nodes = LxdCliAllocator::list_nodes()?;
+        let nodes =
+            LxdCliAllocator::list_nodes().map_err(|e| LxdError::Deallocate(e.to_string()))?;
 
         let mut name: Option<String> = None;
         for instance in nodes.iter() {
@@ -329,29 +377,32 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
 
         if let Some(name) = name {
             LxdCliAllocator::deallocate_by_name(&name)
+                .map_err(|e| LxdError::Deallocate(e.to_string()))
         } else {
-            Err(LxcError::NotFound(addr.to_string()))
+            Err(LxdError::NotFound(addr.to_string()))
         }
     }
 
-    fn deallocate_all(&self) -> Result<(), LxcError> {
-        let nodes = LxdCliAllocator::list_nodes()?;
+    fn deallocate_all(&self) -> Result<(), LxdError> {
+        let nodes =
+            LxdCliAllocator::list_nodes().map_err(|e| LxdError::Deallocate(e.to_string()))?;
         log::debug!("deallocate {} nodes: {:?}", nodes.len(), nodes);
 
         for node in nodes {
-            LxdCliAllocator::deallocate_by_name(&node.name)?;
+            LxdCliAllocator::deallocate_by_name(&node.name)
+                .map_err(|e| LxdError::Deallocate(e.to_string()))?;
         }
 
         Ok(())
     }
 
-    fn ensure_project(&self, project: &str) -> Result<(), LxcError> {
+    fn ensure_project(&self, project: &str) -> Result<(), LxdError> {
         #[derive(serde::Deserialize, Debug)]
         struct _LxcProject {
             name: String,
         }
 
-        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        let found = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["project", "list", "--format=json"])
             .and_then(|output| {
                 let found = serde_json::from_slice::<Vec<_LxcProject>>(&output)
@@ -364,45 +415,55 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
 
                 Ok(found)
             })
-            .and_then(|found| {
-                if !found {
-                    LxdCliAllocator::add_project(project)
-                } else {
-                    Ok(())
-                }
-            })
+            .map_err(|e| LxdError::Executor(e.to_string()))?;
+
+        if !found {
+            LxdCliAllocator::add_project(project).map_err(|e| LxdError::Executor(e.to_string()))
+        } else {
+            Ok(())
+        }
     }
 }
 
 const LXD_PROJECT_NAME: &str = "spread-adhoc";
 
+/// Spread node allocator using LXD backend.
 pub struct LxdAllocator {
     backend: Box<dyn LxdAllocatorExecutor>,
     conf: LxdBackendConfig,
 }
 
-pub struct UserConfig<'a> {
+/// Carries details for confugration of remote user access.
+pub struct RemoteUserAccessConfig<'a> {
     pub user: &'a str,
     pub password: &'a str,
 }
 
 impl LxdAllocator {
+    /// Allocate a node for a spread system and set up remote access for the
+    /// user.
     pub fn allocate(
         &self,
         sysname: &str,
-        user_config: UserConfig,
-    ) -> Result<LxdNodeAllocation, LxcError> {
+        user_config: RemoteUserAccessConfig,
+    ) -> Result<LxdNodeAllocation, LxdError> {
         let sysconf = if let Some(sysconf) = self.conf.system.get(sysname) {
             sysconf
         } else {
-            return Err(LxcError::Allocate(io::Error::other("system not found")));
+            return Err(LxdError::NotFound(format!(
+                "system \"{}\" not found in configuration",
+                sysname
+            )));
         };
 
         let steps = if let Some(setup_steps) = sysconf.setup_steps.as_ref() {
             if let Some(steps) = self.conf.setup.get(setup_steps) {
                 steps
             } else {
-                return Err(LxcError::Other(io::Error::other("setup steps not found")));
+                return Err(LxdError::NotFound(format!(
+                    "setup steps \"{}\" not found in configuration",
+                    setup_steps
+                )));
             }
         } else {
             log::warn!("no setup steps declared for this system");
@@ -432,14 +493,17 @@ impl LxdAllocator {
         })
     }
 
-    pub fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxcError> {
+    /// Deallocate a node associated with a given address.
+    pub fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxdError> {
         self.backend.deallocate_by_addr(addr)
     }
 
-    pub fn deallocate_all(&self) -> Result<(), LxcError> {
+    /// Deallocate all nodes.
+    pub fn deallocate_all(&self) -> Result<(), LxdError> {
         self.backend.deallocate_all()
     }
 
+    /// Returns a new, unconfigured allocator.
     pub fn new() -> Self {
         LxdAllocator {
             conf: LxdBackendConfig {
@@ -470,12 +534,16 @@ fn default_root_size() -> bytesize::ByteSize {
     bytesize::ByteSize(bytesize::gib(10 as u64))
 }
 
+/// Resources assigned to a node.
 #[derive(serde::Deserialize, Debug)]
 struct LxdNodeResources {
+    /// RAM
     #[serde(default = "default_mem")]
     mem: bytesize::ByteSize,
+    /// Number of CPUs.
     #[serde(default = "default_cpu")]
     cpu: u32,
+    /// Root disk size (applicable to VM).
     #[serde(default = "default_root_size")]
     size: bytesize::ByteSize,
 }
@@ -490,33 +558,47 @@ impl Default for LxdNodeResources {
     }
 }
 
+/// Configuration for a new LXD node.
 #[derive(serde::Deserialize, Debug)]
 struct LxdNodeConfig {
+    /// Image to use.
     image: String,
+    /// Setup steps.
     #[serde(rename = "setup-steps")]
     setup_steps: Option<String>,
+    /// Resources configuration.
     #[serde(default)]
     resources: LxdNodeResources,
+    /// Secure boot support (applicable to VMs).
     #[serde(rename = "secure-boot", default)]
     secure_boot: bool,
+    /// Whether the system is a VM.
+    #[serde(default)]
+    vm: bool,
 }
 
+/// Configuration for the LXD backend.
 #[derive(serde::Deserialize, Debug)]
 struct LxdBackendConfig {
+    /// Systems with their properties, keyed by spread system name.
     system: HashMap<String, LxdNodeConfig>,
+    /// Setup steps.
     setup: HashMap<String, Vec<String>>,
 }
 
-pub fn allocator_with_config<R>(cfg: R) -> Result<LxdAllocator, LxcError>
+/// Returns LXD node allocator loading its confugiration from the provided
+/// reader.
+pub fn allocator_with_config<R>(cfg: R) -> Result<LxdAllocator, LxdError>
 where
     R: io::Read,
 {
-    let conf: LxdBackendConfig = serde_yml::from_reader(cfg).map_err(|e| LxcError::Config(e))?;
+    let conf: LxdBackendConfig = serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
     log::debug!("config: {:?}", conf);
 
     Ok(LxdAllocator::new_with_config(conf))
 }
 
+/// Returns the file name of a LXD node allocator.
 pub fn config_file_name() -> &'static str {
     return "spread-lxd.yaml";
 }
