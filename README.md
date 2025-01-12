@@ -6,9 +6,9 @@ Currently, spread test nodes can only be allocated using
 and a native LXD backend supported by spread are its focus on VM mode and
 greater flexibility in resource assignment.
 
-Refer to the [spread-lxd.yaml](./blob/master/spread-lxd.yaml) file for an
+Refer to the [spread-lxd.yaml](./spread-lxd.yaml) file for an
 example configuration of the LXD backend. Additionally, the
-[spread.yaml](./blob/master/spread.yaml) file provides an example of integrating
+[spread.yaml](./spread.yaml) file provides an example of integrating
 `spread-adhoc-allocator` as a spread `adhoc` backend.
 
 🚧 TODO:
