@@ -69,11 +69,6 @@ enum LxcRunnerScope<'a> {
     Project(&'a str),
 }
 
-/// Wrapper for runing lxc commands.
-struct LxcRunner<'a> {
-    scope: LxcRunnerScope<'a>,
-}
-
 /// Wraps lxc command runner errors.
 #[derive(thiserror::Error, Debug)]
 pub enum LxcRunnerError {
@@ -83,15 +78,27 @@ pub enum LxcRunnerError {
     Execution { stderr: String, exit_code: i32 },
 }
 
-impl<'a> LxcRunner<'a> {
+/// Trait representing a way to run lxc command.
+trait LxcRunner<'a> {
+    fn new() -> Self;
+    fn with_scope(scope: LxcRunnerScope<'a>) -> Self;
+    fn run(&self, args: &[&str]) -> Result<Vec<u8>, LxcRunnerError>;
+}
+
+/// Wrapper for runing lxc commands.
+struct LxcCommand<'a> {
+    scope: LxcRunnerScope<'a>,
+}
+
+impl<'a> LxcRunner<'a> for LxcCommand<'a> {
     fn new() -> Self {
-        LxcRunner {
+        LxcCommand {
             scope: LxcRunnerScope::Default,
         }
     }
 
     fn with_scope(scope: LxcRunnerScope<'a>) -> Self {
-        LxcRunner { scope }
+        LxcCommand { scope }
     }
 
     /// Runs a command returning its output (stdout).
@@ -129,8 +136,7 @@ impl<'a> LxcRunner<'a> {
     }
 }
 
-/// Lxd node allocator which uses 'lxc' command.
-struct LxdCliAllocator;
+use std::marker::PhantomData;
 
 mod lxc {
     pub mod types {
@@ -178,9 +184,20 @@ pub enum LxcCliAllocatorError {
     Provision(String),
 }
 
-impl LxdCliAllocator {
+/// Lxd node allocator which uses 'lxc' command.
+struct LxdCliAllocator<'a, R>
+where
+    R: LxcRunner<'a>,
+{
+    marker: PhantomData<&'a R>,
+}
+
+impl<'a, R> LxdCliAllocator<'a, R>
+where
+    R: LxcRunner<'a>,
+{
     fn add_project(project: &str) -> Result<(), LxcCliAllocatorError> {
-        LxcRunner::new()
+        R::new()
             .run(&[
                 "project",
                 "create",
@@ -195,7 +212,7 @@ impl LxdCliAllocator {
     }
 
     fn list_nodes() -> Result<Vec<lxc::types::Instance>, LxcCliAllocatorError> {
-        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        R::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["list", "--format=json"])
             .map_err(|e| LxcCliAllocatorError::ListNodes(e.to_string()))
             .and_then(|output| {
@@ -205,7 +222,7 @@ impl LxdCliAllocator {
     }
 
     fn list_node_by_name(name: &str) -> Result<lxc::types::Instance, LxcCliAllocatorError> {
-        let nodes = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        let nodes = R::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["list", "--format=json", name])
             .map_err(|e| LxcCliAllocatorError::ListNodes(e.to_string()))
             .and_then(|output| {
@@ -223,7 +240,7 @@ impl LxdCliAllocator {
     fn deallocate_by_name(name: &str) -> Result<(), LxcCliAllocatorError> {
         log::debug!("deallocate by name '{}'", name);
 
-        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        R::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["delete", "--force", name])
             .map_err(|e| LxcCliAllocatorError::DeleteNode(e.to_string()))
             .map(|_| ())
@@ -249,7 +266,7 @@ impl LxdCliAllocator {
 
             thread::sleep(time::Duration::from_millis(500));
 
-            let instance = LxdCliAllocator::list_node_by_name(&name)?;
+            let instance = Self::list_node_by_name(&name)?;
             if instance.status != "Running" {
                 log::debug!("not yet running, in state {}", instance.status);
                 continue;
@@ -291,7 +308,7 @@ impl LxdCliAllocator {
     fn provision(name: &str, steps: &[String]) -> Result<(), LxcCliAllocatorError> {
         log::debug!("provision {}", name);
 
-        let cli = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME));
+        let cli = R::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME));
         for step in steps {
             log::debug!("provisioning step:\n{}", step);
             cli.run(&["exec", name, "--", "/bin/bash", "-c", step])
@@ -301,13 +318,16 @@ impl LxdCliAllocator {
     }
 }
 
-impl LxdAllocatorExecutor for LxdCliAllocator {
+impl<'a, R> LxdAllocatorExecutor for LxdCliAllocator<'a, R>
+where
+    R: LxcRunner<'a>,
+{
     fn allocate(&self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxdError> {
         let memory_arg = format!("limits.memory={}", node.memory);
         let cpu_arg = format!("limits.cpu={}", node.cpu);
         let secure_boot_arg = format!("security.secureboot={}", node.secure_boot);
         let root_size_arg = format!("root,size={}", node.root_size);
-        let name = LxdCliAllocator::lxdfiy_name(node.name);
+        let name = Self::lxdfiy_name(node.name);
         let args = vec![
             "launch",
             "--ephemeral",
@@ -324,15 +344,15 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             &name,
         ];
 
-        LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        R::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&args)
             .map_err(|e| LxdError::Allocate(e.to_string()))
             .map(|_| ())?;
 
-        let addr = LxdCliAllocator::wait_for_address(&name, time::Duration::from_secs(60))
+        let addr = Self::wait_for_address(&name, time::Duration::from_secs(60))
             .map_err(|e| LxdError::Allocate(e.to_string()))?;
 
-        LxdCliAllocator::provision(&name, node.provision_steps)
+        Self::provision(&name, node.provision_steps)
             .map_err(|e| LxdError::Allocate(e.to_string()))?;
 
         Ok(LxdNodeAllocation {
@@ -345,8 +365,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
     fn deallocate_by_addr(&self, addr: &str) -> Result<(), LxdError> {
         log::debug!("deallocate by address '{}'", addr);
 
-        let nodes =
-            LxdCliAllocator::list_nodes().map_err(|e| LxdError::Deallocate(e.to_string()))?;
+        let nodes = Self::list_nodes().map_err(|e| LxdError::Deallocate(e.to_string()))?;
 
         let mut name: Option<String> = None;
         for instance in nodes.iter() {
@@ -376,20 +395,18 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
         }
 
         if let Some(name) = name {
-            LxdCliAllocator::deallocate_by_name(&name)
-                .map_err(|e| LxdError::Deallocate(e.to_string()))
+            Self::deallocate_by_name(&name).map_err(|e| LxdError::Deallocate(e.to_string()))
         } else {
             Err(LxdError::NotFound(addr.to_string()))
         }
     }
 
     fn deallocate_all(&self) -> Result<(), LxdError> {
-        let nodes =
-            LxdCliAllocator::list_nodes().map_err(|e| LxdError::Deallocate(e.to_string()))?;
+        let nodes = Self::list_nodes().map_err(|e| LxdError::Deallocate(e.to_string()))?;
         log::debug!("deallocate {} nodes: {:?}", nodes.len(), nodes);
 
         for node in nodes {
-            LxdCliAllocator::deallocate_by_name(&node.name)
+            Self::deallocate_by_name(&node.name)
                 .map_err(|e| LxdError::Deallocate(e.to_string()))?;
         }
 
@@ -402,7 +419,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             name: String,
         }
 
-        let found = LxcRunner::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
+        let found = R::with_scope(LxcRunnerScope::Project(LXD_PROJECT_NAME))
             .run(&["project", "list", "--format=json"])
             .and_then(|output| {
                 let found = serde_json::from_slice::<Vec<_LxcProject>>(&output)
@@ -418,7 +435,7 @@ impl LxdAllocatorExecutor for LxdCliAllocator {
             .map_err(|e| LxdError::Executor(e.to_string()))?;
 
         if !found {
-            LxdCliAllocator::add_project(project).map_err(|e| LxdError::Executor(e.to_string()))
+            Self::add_project(project).map_err(|e| LxdError::Executor(e.to_string()))
         } else {
             Ok(())
         }
@@ -510,14 +527,18 @@ impl LxdAllocator {
                 setup: HashMap::new(),
                 system: HashMap::new(),
             },
-            backend: Box::new(LxdCliAllocator {}),
+            backend: Box::new(LxdCliAllocator::<LxcCommand> {
+                marker: PhantomData,
+            }),
         }
     }
 
     fn new_with_config(conf: LxdBackendConfig) -> Self {
         LxdAllocator {
             conf: conf,
-            backend: Box::new(LxdCliAllocator {}),
+            backend: Box::new(LxdCliAllocator::<LxcCommand> {
+                marker: PhantomData,
+            }),
         }
     }
 }
