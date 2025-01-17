@@ -14,6 +14,8 @@ mod lxd;
 
 use anyhow::{anyhow, Result};
 
+const BUILD_GIT_VERSION: &str = env!["BUILD_GIT_VERSION"];
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -39,6 +41,8 @@ enum Command {
     },
     /// Cleanup all allocated systems.
     Cleanup,
+    /// Show version information.
+    Version,
 }
 
 fn main() -> Result<()> {
@@ -94,6 +98,10 @@ fn main() -> Result<()> {
         Some(Command::Cleanup) => lxd::LxdAllocator::new()
             .deallocate_all()
             .context("cannot cleanup all nodes"),
+        Some(Command::Version) => {
+            println!("{}", BUILD_GIT_VERSION);
+            Ok(())
+        }
         None => Err(anyhow!("no command provided, see --help")),
     }
 }
