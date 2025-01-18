@@ -26,15 +26,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Get the release version from the tag or input
-        if: env.VERSION == ''
+      - name: Get the release version from tag push
+        if: {{ env.VERSION == '' && github.event_name == 'push' }}
         shell: bash
         run: |
-          if [ -n "{{ inputs.version }}" ]; then
-              echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
-          else
-              echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
-          fi
+          echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+
+      - name: Get the release version from input
+        if: {{ env.VERSION == '' && github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+
       - name: Show the version
         run: |
           echo "version is: $VERSION"
