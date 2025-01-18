@@ -98,7 +98,7 @@ jobs:
     - name: Prepare archive content
       shell: bash
       run: |
-        mkdir -p "$ARCHIVE"/doc
+        mkdir -p "$ARCHIVE"
         cp -av "$BIN" "$ARCHIVE"/
         cp -v README.md "$ARCHIVE"/
         cp -av LICENSES "$ARCHIVE"/
