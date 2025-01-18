@@ -1,0 +1,112 @@
+# based on ripgrep release workflow:
+# https://github.com/BurntSushi/ripgrep/blob/d6b59feff890f038acde7d5e151995d8aec1e107/.github/workflows/release.ymlyml
+
+name: Release
+
+on:
+  push:
+    tags:
+      # x.y.z
+      - "[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    name: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get the release version from the tag or input
+        if: env.VERSION == ''
+        shell: bash
+        run: |
+          if [ -n "{{ inputs.version }}" ]; then
+              echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+          else
+              echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+          fi
+      - name: Show the version
+        run: |
+          echo "version is: $VERSION"
+      # inspired by ripgrep checks
+      - name: Check that tag version and Cargo.toml version are the same
+        shell: bash
+        run: |
+          if ! grep -q "version = \"$VERSION\"" Cargo.toml; then
+            echo "version does not match Cargo.toml" >&2
+            exit 1
+          fi
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create $VERSION --draft --verify-tag --title $VERSION
+    outputs:
+      version: ${{ env.VERSION }}
+
+  build-release:
+    name: build-release
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - target: x86_64-unknown-linux-musl
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        target: ${{ matrix.target }}
+
+    - name: Set target variables
+      shell: bash
+      run: |
+        echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
+        echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
+
+    - name: Show command used for Cargo
+      shell: bash
+      run: |
+        echo "target flag is: ${{ env.TARGET_FLAGS }}"
+        echo "target dir is: ${{ env.TARGET_DIR }}"
+
+    - name: Determine archive name
+      shell: bash
+      run: |
+        version="${{ needs.create-release.outputs.version }}"
+        echo "ARCHIVE=spread-adhoc-allocator-$version-${{ matrix.target }}" >> $GITHUB_ENV
+
+    - name: Creating directory for archive
+      shell: bash
+      run: |
+        mkdir -p "$ARCHIVE"/
+        cp -v "$BIN" "$ARCHIVE"/
+        cp -v README.md "$ARCHIVE"/
+        cp -av LICENSES "$ARCHIVE"/doc/
+
+    - name: Build archive
+      shell: bash
+      run: |
+        tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+        shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+        echo "ASSET=$ARCHIVE.tar.gz" >> $GITHUB_ENV
+        echo "ASSET_SUM=$ARCHIVE.tar.gz.sha256" >> $GITHUB_ENV
+
+    - name: Upload release archive
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: bash
+      run: |
+        version="${{ needs.create-release.outputs.version }}"
+        gh release upload "$version" ${{ env.ASSET }} ${{ env.ASSET_SUM }}
