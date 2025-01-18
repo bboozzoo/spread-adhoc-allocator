@@ -27,13 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Get the release version from tag push
-        if: "{{ env.VERSION == '' && github.event_name == 'push' }}"
+        if: "${{ env.VERSION == '' && github.event_name == 'push' }}"
         shell: bash
         run: |
           echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
 
       - name: Get the release version from input
-        if: "{{ env.VERSION == '' && github.event_name == 'workflow_dispatch' }}"
+        if: "${{ env.VERSION == '' && github.event_name == 'workflow_dispatch' }}"
         shell: bash
         run: |
           echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
