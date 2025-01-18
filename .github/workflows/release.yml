@@ -83,19 +83,25 @@ jobs:
         echo "target flag is: ${{ env.TARGET_FLAGS }}"
         echo "target dir is: ${{ env.TARGET_DIR }}"
 
+    - name: Build release binary
+      shell: bash
+      run: |
+        cargo build --verbose --release ${{ env.TARGET_FLAGS }}
+        echo "BIN=target/${{ matrix.target }}/release/spread-adhoc-allocator" >> $GITHUB_ENV
+
     - name: Determine archive name
       shell: bash
       run: |
         version="${{ needs.create-release.outputs.version }}"
         echo "ARCHIVE=spread-adhoc-allocator-$version-${{ matrix.target }}" >> $GITHUB_ENV
 
-    - name: Creating directory for archive
+    - name: Prepare archive content
       shell: bash
       run: |
-        mkdir -p "$ARCHIVE"/
-        cp -v "$BIN" "$ARCHIVE"/
+        mkdir -p "$ARCHIVE"/doc
+        cp -av "$BIN" "$ARCHIVE"/
         cp -v README.md "$ARCHIVE"/
-        cp -av LICENSES "$ARCHIVE"/doc/
+        cp -av LICENSES "$ARCHIVE"/
 
     - name: Build archive
       shell: bash
