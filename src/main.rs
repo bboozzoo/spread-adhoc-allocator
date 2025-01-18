@@ -15,6 +15,7 @@ mod lxd;
 use anyhow::{anyhow, Result};
 
 const BUILD_GIT_VERSION: &str = env!["BUILD_GIT_VERSION"];
+const VERSION: &str = env!["CARGO_PKG_VERSION"];
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -99,7 +100,7 @@ fn main() -> Result<()> {
             .deallocate_all()
             .context("cannot cleanup all nodes"),
         Some(Command::Version) => {
-            println!("{}", BUILD_GIT_VERSION);
+            println!("{} (git {})", VERSION, BUILD_GIT_VERSION);
             Ok(())
         }
         None => Err(anyhow!("no command provided, see --help")),
