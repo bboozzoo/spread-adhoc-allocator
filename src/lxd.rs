@@ -167,6 +167,13 @@ mod lxc {
     }
 }
 
+fn lxdfy_name(name: &str) -> String {
+    String::from_iter(name.chars().map(|c| match c {
+        '.' | ':' => '-',
+        _ => c,
+    }))
+}
+
 /// Wraps lxc backend executor errors.
 #[derive(thiserror::Error, Debug)]
 pub enum LxcCliAllocatorError {
@@ -246,13 +253,6 @@ where
             .map(|_| ())
     }
 
-    fn lxdfiy_name(name: &str) -> String {
-        String::from_iter(name.chars().map(|c| match c {
-            '.' => '-',
-            _ => c,
-        }))
-    }
-
     fn wait_for_address(
         name: &str,
         timeout: time::Duration,
@@ -327,7 +327,7 @@ where
         let cpu_arg = format!("limits.cpu={}", node.cpu);
         let secure_boot_arg = format!("security.secureboot={}", node.secure_boot);
         let root_size_arg = format!("root,size={}", node.root_size);
-        let name = Self::lxdfiy_name(node.name);
+        let name = lxdfy_name(node.name);
         let args = vec![
             "launch",
             "--ephemeral",
@@ -622,4 +622,16 @@ where
 /// Returns the file name of a LXD node allocator.
 pub fn config_file_name() -> &'static str {
     return "spread-lxd.yaml";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lxdify() {
+        assert_eq!(lxdfy_name("foo-bar"), "foo-bar");
+        assert_eq!(lxdfy_name("foo.bar"), "foo-bar");
+        assert_eq!(lxdfy_name("foo:bar"), "foo-bar");
+    }
 }
