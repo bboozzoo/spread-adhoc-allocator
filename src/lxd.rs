@@ -31,7 +31,14 @@ pub enum LxdError {
     NotFound(String),
 }
 
+impl PartialEq for LxdError {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
+    }
+}
+
 /// Describes an allocate lxd node.
+#[derive(Debug, PartialEq)]
 pub struct LxdNodeAllocation {
     pub name: String,
     pub addr: net::Ipv4Addr,
@@ -39,6 +46,7 @@ pub struct LxdNodeAllocation {
 }
 
 /// Carries details of a node to allocate.
+#[derive(Debug, PartialEq)]
 pub struct LxdNodeDetails<'a> {
     image: &'a str,
     name: &'a str,
@@ -259,8 +267,12 @@ where
             )
             .map_err(|e| LxcCliAllocatorError::ListNodes(e.to_string()))
             .and_then(|output| {
-                Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
-                    .expect("cannot parse instance list JSON"))
+                Ok(
+                    serde_json::from_slice::<Vec<lxc::types::Instance>>(&output).expect(&format!(
+                        "cannot parse instance list JSON: '{}",
+                        String::from_utf8_lossy(&output)
+                    )),
+                )
             })
     }
 
@@ -278,8 +290,12 @@ where
             )
             .map_err(|e| LxcCliAllocatorError::ListNodes(e.to_string()))
             .and_then(|output| {
-                Ok(serde_json::from_slice::<Vec<lxc::types::Instance>>(&output)
-                    .expect("cannot parse instance JSON"))
+                Ok(
+                    serde_json::from_slice::<Vec<lxc::types::Instance>>(&output).expect(&format!(
+                        "cannot parse instance JSON: '{}'",
+                        String::from_utf8_lossy(&output)
+                    )),
+                )
             })?;
 
         if nodes.len() == 0 {
@@ -490,7 +506,6 @@ where
             .runner
             .run(
                 LxcCommandBuilder::new()
-                    .with_scope(LxcCommandScope::Project(LXD_PROJECT_NAME))
                     .args(&["project", "list", "--format=json"])
                     .build(),
             )
@@ -700,18 +715,28 @@ pub fn config_file_name() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::VecDeque, str::FromStr};
+
     use super::*;
 
+    const ONE_PROJECT_LIST: &str = r##"[{
+"name":"default","description":"Default LXD project","config":{"features.images":"true","features.networks":"true","features.networks.zones":"true","features.profiles":"true","features.storage.buckets":"true","features.storage.volumes":"true"},"used_by":["/1.0/profiles/default","/1.0/images/16c5963a3c55d17639f96099f8133d986601dbafc79c53d26ba384cbcfcd5bad","/1.0/networks/lxdbr0"]},{"name":"snapcraft","description":"","config":{"features.images":"true","features.profiles":"true","features.storage.buckets":"true","features.storage.volumes":"true"},"used_by":["/1.0/profiles/default?project=snapcraft"]},{"name":"spread-adhoc","description":"","config":{"features.images":"false","features.profiles":"false","features.storage.buckets":"true","features.storage.volumes":"true"},"used_by":["/1.0/storage-pools/default/volumes/virtual-machine/ubuntu-24-04-64-1744396627?project=spread-adhoc","/1.0/instances/ubuntu-24-04-64-1744396627?project=spread-adhoc"]
+}]"##;
+    const ONE_NODE_LIST: &str = r##"[{
+"name":"ubuntu-24-04-64-1744396627",
+"description":"","status":"Running","status_code":103,"created_at":"2025-01-26T14:33:11.319917616Z","last_used_at":"2025-01-26T14:33:19.637141509Z","location":"none","type":"virtual-machine","project":"spread-adhoc","architecture":"x86_64","ephemeral":true,"stateful":false,"profiles":["default"],"config":{"image.architecture":"amd64","image.description":"ubuntu 24.04 LTS amd64 (release) (20250115)","image.label":"release","image.os":"ubuntu","image.release":"noble","image.serial":"20250115","image.type":"disk1.img","image.version":"24.04","limits.cpu":"4","limits.memory":"4294967296","security.secureboot":"false","volatile.base_image":"16c5963a3c55d17639f96099f8133d986601dbafc79c53d26ba384cbcfcd5bad","volatile.cloud-init.instance-id":"0c428aad-043f-45e8-b4fe-edd762f72757","volatile.eth0.host_name":"tapc73ec1df","volatile.eth0.hwaddr":"00:16:3e:3d:1a:76","volatile.last_state.power":"RUNNING","volatile.uuid":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.uuid.generation":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.vsock_id":"721893514"},"devices":{"root":{"path":"/","pool":"default","size":"16106127360","type":"disk"}},"expanded_config":{"image.architecture":"amd64","image.description":"ubuntu 24.04 LTS amd64 (release) (20250115)","image.label":"release","image.os":"ubuntu","image.release":"noble","image.serial":"20250115","image.type":"disk1.img","image.version":"24.04","limits.cpu":"4","limits.memory":"4294967296","security.secureboot":"false","volatile.base_image":"16c5963a3c55d17639f96099f8133d986601dbafc79c53d26ba384cbcfcd5bad","volatile.cloud-init.instance-id":"0c428aad-043f-45e8-b4fe-edd762f72757","volatile.eth0.host_name":"tapc73ec1df","volatile.eth0.hwaddr":"00:16:3e:3d:1a:76","volatile.last_state.power":"RUNNING","volatile.uuid":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.uuid.generation":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.vsock_id":"721893514"},"expanded_devices":{"eth0":{"name":"eth0","network":"lxdbr0","type":"nic"},"root":{"path":"/","pool":"default","size":"16106127360","type":"disk"}},"backups":null,"state":{"status":"Running","status_code":103,"disk":null,"memory":{"usage":444915712,"usage_peak":0,"total":4097273856,"swap_usage":0,"swap_usage_peak":0},"network":{"enp5s0":{"addresses":[{"family":"inet","address":"10.22.100.75","netmask":"24","scope":"global"},{"family":"inet6","address":"fd42:2245:81ae:90da:216:3eff:fe3d:1a76","netmask":"64","scope":"global"},{"family":"inet6","address":"fe80::216:3eff:fe3d:1a76","netmask":"64","scope":"link"}],"counters":{"bytes_received":316098,"bytes_sent":13324,"packets_received":220,"packets_sent":148,"errors_received":0,"errors_sent":0,"packets_dropped_outbound":0,"packets_dropped_inbound":0},"hwaddr":"00:16:3e:3d:1a:76","host_name":"tapc73ec1df","mtu":1500,"state":"up","type":"broadcast"},"lo":{"addresses":[{"family":"inet","address":"127.0.0.1","netmask":"8","scope":"local"},{"family":"inet6","address":"::1","netmask":"128","scope":"local"}],"counters":{"bytes_received":7652,"bytes_sent":7652,"packets_received":96,"packets_sent":96,"errors_received":0,"errors_sent":0,"packets_dropped_outbound":0,"packets_dropped_inbound":0},"hwaddr":"","host_name":"","mtu":65536,"state":"up","type":"loopback"}},"pid":134121,"processes":21,"cpu":{"usage":12200111000}},"snapshots":null
+}]"##;
+
     struct MockLxcRunner {
-        v: Vec<Vec<String>>,
-        r: Vec<Result<Vec<u8>, LxcRunnerError>>,
+        seen_calls: VecDeque<Vec<String>>,
+        outputs: VecDeque<Result<Vec<u8>, LxcRunnerError>>,
     }
 
     impl MockLxcRunner {
         fn new(calls: Vec<Result<Vec<u8>, LxcRunnerError>>) -> Self {
             Self {
-                v: Vec::new(),
-                r: calls,
+                seen_calls: VecDeque::new(),
+                outputs: VecDeque::from(calls),
             }
         }
     }
@@ -726,30 +751,57 @@ mod tests {
                 .collect();
 
             let out = self
-                .r
-                .pop()
+                .outputs
+                .pop_front()
                 .expect(&format!("expected mock result for call {:?}", call));
 
-            self.v.push(call);
+            eprint!(
+                "call {:?} output: {}\n",
+                call,
+                String::from_utf8_lossy(out.as_ref().unwrap())
+            );
+            self.seen_calls.push_back(call);
             out
         }
     }
 
     #[test]
-    fn test_cli_alloc_add_project() {
-        let r = MockLxcRunner::new(vec![Ok("".as_bytes().to_vec())]);
+    fn test_cli_alloc_emsure_project_exists() {
+        let r = MockLxcRunner::new(vec![Ok(ONE_PROJECT_LIST.as_bytes().to_vec())]);
         let mut a = LxdCliAllocator::new(r);
-        let res = a.add_project("foo");
+        let res = a.ensure_project(LXD_PROJECT_NAME);
         assert!(res.is_ok());
 
         let mut r = a.test_into_runner();
-        assert_eq!(r.v.len(), 1);
+        assert_eq!(r.seen_calls.len(), 1);
         assert_eq!(
-            r.v.pop().expect("expected a call"),
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec!["project", "list", "--format=json",]
+        );
+    }
+
+    #[test]
+    fn test_cli_alloc_ensure_project_add() {
+        let r = MockLxcRunner::new(vec![
+            Ok("[]".as_bytes().to_vec()),
+            Ok("".as_bytes().to_vec()),
+        ]);
+        let mut a = LxdCliAllocator::new(r);
+        let res = a.ensure_project(LXD_PROJECT_NAME);
+        assert!(res.is_ok());
+
+        let mut r = a.test_into_runner();
+        assert_eq!(r.seen_calls.len(), 2);
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec!["project", "list", "--format=json",]
+        );
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
             vec![
                 "project",
                 "create",
-                "foo",
+                "spread-adhoc",
                 "-c",
                 "features.images=false",
                 "-c",
@@ -769,21 +821,16 @@ mod tests {
 
         // check commands
         let mut r = a.test_into_runner();
-        assert_eq!(r.v.len(), 1);
+        assert_eq!(r.seen_calls.len(), 1);
         assert_eq!(
-            r.v.pop().expect("expected a call"),
+            r.seen_calls.pop_front().expect("expected a call"),
             vec!["--project", "spread-adhoc", "list", "--format=json",]
         );
     }
 
     #[test]
     fn test_cli_list_nodes_some() {
-        let r = MockLxcRunner::new(vec![Ok(r##"[
-{
-"name":"ubuntu-24-04-64-1744396627",
-"description":"","status":"Running","status_code":103,"created_at":"2025-01-26T14:33:11.319917616Z","last_used_at":"2025-01-26T14:33:19.637141509Z","location":"none","type":"virtual-machine","project":"spread-adhoc","architecture":"x86_64","ephemeral":true,"stateful":false,"profiles":["default"],"config":{"image.architecture":"amd64","image.description":"ubuntu 24.04 LTS amd64 (release) (20250115)","image.label":"release","image.os":"ubuntu","image.release":"noble","image.serial":"20250115","image.type":"disk1.img","image.version":"24.04","limits.cpu":"4","limits.memory":"4294967296","security.secureboot":"false","volatile.base_image":"16c5963a3c55d17639f96099f8133d986601dbafc79c53d26ba384cbcfcd5bad","volatile.cloud-init.instance-id":"0c428aad-043f-45e8-b4fe-edd762f72757","volatile.eth0.host_name":"tapc73ec1df","volatile.eth0.hwaddr":"00:16:3e:3d:1a:76","volatile.last_state.power":"RUNNING","volatile.uuid":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.uuid.generation":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.vsock_id":"721893514"},"devices":{"root":{"path":"/","pool":"default","size":"16106127360","type":"disk"}},"expanded_config":{"image.architecture":"amd64","image.description":"ubuntu 24.04 LTS amd64 (release) (20250115)","image.label":"release","image.os":"ubuntu","image.release":"noble","image.serial":"20250115","image.type":"disk1.img","image.version":"24.04","limits.cpu":"4","limits.memory":"4294967296","security.secureboot":"false","volatile.base_image":"16c5963a3c55d17639f96099f8133d986601dbafc79c53d26ba384cbcfcd5bad","volatile.cloud-init.instance-id":"0c428aad-043f-45e8-b4fe-edd762f72757","volatile.eth0.host_name":"tapc73ec1df","volatile.eth0.hwaddr":"00:16:3e:3d:1a:76","volatile.last_state.power":"RUNNING","volatile.uuid":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.uuid.generation":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.vsock_id":"721893514"},"expanded_devices":{"eth0":{"name":"eth0","network":"lxdbr0","type":"nic"},"root":{"path":"/","pool":"default","size":"16106127360","type":"disk"}},"backups":null,"state":{"status":"Running","status_code":103,"disk":null,"memory":{"usage":444915712,"usage_peak":0,"total":4097273856,"swap_usage":0,"swap_usage_peak":0},"network":{"enp5s0":{"addresses":[{"family":"inet","address":"10.22.100.75","netmask":"24","scope":"global"},{"family":"inet6","address":"fd42:2245:81ae:90da:216:3eff:fe3d:1a76","netmask":"64","scope":"global"},{"family":"inet6","address":"fe80::216:3eff:fe3d:1a76","netmask":"64","scope":"link"}],"counters":{"bytes_received":316098,"bytes_sent":13324,"packets_received":220,"packets_sent":148,"errors_received":0,"errors_sent":0,"packets_dropped_outbound":0,"packets_dropped_inbound":0},"hwaddr":"00:16:3e:3d:1a:76","host_name":"tapc73ec1df","mtu":1500,"state":"up","type":"broadcast"},"lo":{"addresses":[{"family":"inet","address":"127.0.0.1","netmask":"8","scope":"local"},{"family":"inet6","address":"::1","netmask":"128","scope":"local"}],"counters":{"bytes_received":7652,"bytes_sent":7652,"packets_received":96,"packets_sent":96,"errors_received":0,"errors_sent":0,"packets_dropped_outbound":0,"packets_dropped_inbound":0},"hwaddr":"","host_name":"","mtu":65536,"state":"up","type":"loopback"}},"pid":134121,"processes":21,"cpu":{"usage":12200111000}},"snapshots":null
-}
-]"##.as_bytes().to_vec())]);
+        let r = MockLxcRunner::new(vec![Ok(ONE_NODE_LIST.as_bytes().to_vec())]);
         let mut a = LxdCliAllocator::new(r);
         let res = a.list_nodes();
         assert!(res.is_ok());
@@ -837,7 +884,85 @@ mod tests {
 
         // check commands
         let mut r = a.test_into_runner();
-        assert_eq!(r.v.len(), 1);
+        assert_eq!(r.seen_calls.len(), 1);
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec!["--project", "spread-adhoc", "list", "--format=json"]
+        );
+    }
+
+    #[test]
+    fn test_cli_allocate() {
+        let r = MockLxcRunner::new(vec![
+            Ok("".as_bytes().to_vec()),            // lxc launch
+            Ok(ONE_NODE_LIST.as_bytes().to_vec()), // lxc list
+            Ok("".as_bytes().to_vec()),            // lxc exec
+        ]);
+        let mut a = LxdCliAllocator::new(r);
+        let res = a.allocate(&LxdNodeDetails {
+            image: "ubuntu:24.04",
+            name: "ubuntu-24-04-64-1744396627",
+            cpu: 4,
+            memory: 8 * 1024 * 1024 * 1024,
+            root_size: 16 * 1024 * 1024 * 1024,
+            secure_boot: false,
+            provision_steps: &vec!["echo foo".to_string()],
+        });
+        assert_eq!(
+            res,
+            Ok(LxdNodeAllocation {
+                name: "ubuntu-24-04-64-1744396627".to_string(),
+                addr: net::Ipv4Addr::from_str("10.22.100.75").unwrap(),
+                ssh_port: 22,
+            })
+        );
+
+        // check commands
+        let mut r = a.test_into_runner();
+        assert_eq!(r.seen_calls.len(), 3);
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec![
+                "--project",
+                "spread-adhoc",
+                "launch",
+                "--ephemeral",
+                "--vm",
+                "--config",
+                "limits.memory=8589934592",
+                "--config",
+                "limits.cpu=4",
+                "--config",
+                "security.secureboot=false",
+                "--device",
+                "root,size=17179869184",
+                "ubuntu:24.04",
+                "ubuntu-24-04-64-1744396627",
+            ],
+        );
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec![
+                "--project",
+                "spread-adhoc",
+                "list",
+                "--format=json",
+                "ubuntu-24-04-64-1744396627",
+            ]
+        );
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec![
+                "--project",
+                "spread-adhoc",
+                "exec",
+                "ubuntu-24-04-64-1744396627",
+                "--",
+                "/bin/bash",
+                "-c",
+                "echo foo",
+            ]
+        );
     }
 
     #[test]
