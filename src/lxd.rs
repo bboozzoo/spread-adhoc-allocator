@@ -158,23 +158,23 @@ mod lxc {
     pub mod types {
         use std::collections::HashMap;
 
-        #[derive(serde::Deserialize, Debug, Clone)]
+        #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
         pub struct NetworkAddress {
             pub family: String,
             pub address: String,
         }
 
-        #[derive(serde::Deserialize, Debug, Clone)]
+        #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
         pub struct NetworkState {
             pub addresses: Vec<NetworkAddress>,
         }
 
-        #[derive(serde::Deserialize, Debug, Clone)]
+        #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
         pub struct InstanceState {
             pub network: Option<HashMap<String, NetworkState>>,
         }
 
-        #[derive(serde::Deserialize, Debug, Clone)]
+        #[derive(serde::Deserialize, Debug, Clone, PartialEq)]
         pub struct Instance {
             pub name: String,
             pub state: InstanceState,
@@ -221,6 +221,13 @@ where
 {
     fn new(r: R) -> Self {
         Self { runner: r }
+    }
+
+    // Consume self and return the underlying runner. Only useful for tests to
+    // avoid going silly with Rc<RefCell<mock-runner>>.
+    #[cfg(test)]
+    fn test_into_runner(self) -> R {
+        self.runner
     }
 
     fn add_project(&mut self, project: &str) -> Result<(), LxcCliAllocatorError> {
@@ -694,8 +701,6 @@ pub fn config_file_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::{RefCell, RefMut};
-    use std::rc::Rc;
 
     struct MockLxcRunner {
         v: Vec<Vec<String>>,
@@ -711,7 +716,7 @@ mod tests {
         }
     }
 
-    impl LxcRunner for RefMut<'_, MockLxcRunner> {
+    impl LxcRunner for MockLxcRunner {
         fn run(&mut self, cmd: LxcCommand) -> Result<Vec<u8>, LxcRunnerError> {
             let LxcCommand(cmd) = cmd;
             let call = cmd
@@ -732,15 +737,12 @@ mod tests {
 
     #[test]
     fn test_cli_alloc_add_project() {
-        let r = Rc::new(RefCell::new(MockLxcRunner::new(vec![Ok(""
-            .as_bytes()
-            .to_vec())])));
-        {
-            let mut a = LxdCliAllocator::new(r.borrow_mut());
-            let res = a.add_project("foo");
-            assert!(res.is_ok());
-        }
-        let mut r = r.borrow_mut();
+        let r = MockLxcRunner::new(vec![Ok("".as_bytes().to_vec())]);
+        let mut a = LxdCliAllocator::new(r);
+        let res = a.add_project("foo");
+        assert!(res.is_ok());
+
+        let mut r = a.test_into_runner();
         assert_eq!(r.v.len(), 1);
         assert_eq!(
             r.v.pop().expect("expected a call"),
@@ -754,6 +756,88 @@ mod tests {
                 "features.profiles=false"
             ]
         );
+    }
+
+    #[test]
+    fn test_cli_list_nodes_none() {
+        let r = MockLxcRunner::new(vec![Ok("[]".as_bytes().to_vec())]);
+        let mut a = LxdCliAllocator::new(r);
+        let res = a.list_nodes();
+        assert!(res.is_ok());
+        let nodes = res.expect("unexpected error");
+        assert_eq!(nodes.len(), 0);
+
+        // check commands
+        let mut r = a.test_into_runner();
+        assert_eq!(r.v.len(), 1);
+        assert_eq!(
+            r.v.pop().expect("expected a call"),
+            vec!["--project", "spread-adhoc", "list", "--format=json",]
+        );
+    }
+
+    #[test]
+    fn test_cli_list_nodes_some() {
+        let r = MockLxcRunner::new(vec![Ok(r##"[
+{
+"name":"ubuntu-24-04-64-1744396627",
+"description":"","status":"Running","status_code":103,"created_at":"2025-01-26T14:33:11.319917616Z","last_used_at":"2025-01-26T14:33:19.637141509Z","location":"none","type":"virtual-machine","project":"spread-adhoc","architecture":"x86_64","ephemeral":true,"stateful":false,"profiles":["default"],"config":{"image.architecture":"amd64","image.description":"ubuntu 24.04 LTS amd64 (release) (20250115)","image.label":"release","image.os":"ubuntu","image.release":"noble","image.serial":"20250115","image.type":"disk1.img","image.version":"24.04","limits.cpu":"4","limits.memory":"4294967296","security.secureboot":"false","volatile.base_image":"16c5963a3c55d17639f96099f8133d986601dbafc79c53d26ba384cbcfcd5bad","volatile.cloud-init.instance-id":"0c428aad-043f-45e8-b4fe-edd762f72757","volatile.eth0.host_name":"tapc73ec1df","volatile.eth0.hwaddr":"00:16:3e:3d:1a:76","volatile.last_state.power":"RUNNING","volatile.uuid":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.uuid.generation":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.vsock_id":"721893514"},"devices":{"root":{"path":"/","pool":"default","size":"16106127360","type":"disk"}},"expanded_config":{"image.architecture":"amd64","image.description":"ubuntu 24.04 LTS amd64 (release) (20250115)","image.label":"release","image.os":"ubuntu","image.release":"noble","image.serial":"20250115","image.type":"disk1.img","image.version":"24.04","limits.cpu":"4","limits.memory":"4294967296","security.secureboot":"false","volatile.base_image":"16c5963a3c55d17639f96099f8133d986601dbafc79c53d26ba384cbcfcd5bad","volatile.cloud-init.instance-id":"0c428aad-043f-45e8-b4fe-edd762f72757","volatile.eth0.host_name":"tapc73ec1df","volatile.eth0.hwaddr":"00:16:3e:3d:1a:76","volatile.last_state.power":"RUNNING","volatile.uuid":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.uuid.generation":"a3e00b40-df48-4939-b03e-bdaa962dd898","volatile.vsock_id":"721893514"},"expanded_devices":{"eth0":{"name":"eth0","network":"lxdbr0","type":"nic"},"root":{"path":"/","pool":"default","size":"16106127360","type":"disk"}},"backups":null,"state":{"status":"Running","status_code":103,"disk":null,"memory":{"usage":444915712,"usage_peak":0,"total":4097273856,"swap_usage":0,"swap_usage_peak":0},"network":{"enp5s0":{"addresses":[{"family":"inet","address":"10.22.100.75","netmask":"24","scope":"global"},{"family":"inet6","address":"fd42:2245:81ae:90da:216:3eff:fe3d:1a76","netmask":"64","scope":"global"},{"family":"inet6","address":"fe80::216:3eff:fe3d:1a76","netmask":"64","scope":"link"}],"counters":{"bytes_received":316098,"bytes_sent":13324,"packets_received":220,"packets_sent":148,"errors_received":0,"errors_sent":0,"packets_dropped_outbound":0,"packets_dropped_inbound":0},"hwaddr":"00:16:3e:3d:1a:76","host_name":"tapc73ec1df","mtu":1500,"state":"up","type":"broadcast"},"lo":{"addresses":[{"family":"inet","address":"127.0.0.1","netmask":"8","scope":"local"},{"family":"inet6","address":"::1","netmask":"128","scope":"local"}],"counters":{"bytes_received":7652,"bytes_sent":7652,"packets_received":96,"packets_sent":96,"errors_received":0,"errors_sent":0,"packets_dropped_outbound":0,"packets_dropped_inbound":0},"hwaddr":"","host_name":"","mtu":65536,"state":"up","type":"loopback"}},"pid":134121,"processes":21,"cpu":{"usage":12200111000}},"snapshots":null
+}
+]"##.as_bytes().to_vec())]);
+        let mut a = LxdCliAllocator::new(r);
+        let res = a.list_nodes();
+        assert!(res.is_ok());
+        let mut nodes = res.expect("unexpected error");
+        assert_eq!(
+            nodes.pop().expect("expected an instance"),
+            lxc::types::Instance {
+                name: "ubuntu-24-04-64-1744396627".to_string(),
+                status: "Running".to_string(),
+                state: lxc::types::InstanceState {
+                    network: Some(HashMap::from([
+                        (
+                            "lo".to_string(),
+                            lxc::types::NetworkState {
+                                addresses: vec![
+                                    lxc::types::NetworkAddress {
+                                        family: "inet".to_string(),
+                                        address: "127.0.0.1".to_string(),
+                                    },
+                                    lxc::types::NetworkAddress {
+                                        family: "inet6".to_string(),
+                                        address: "::1".to_string(),
+                                    }
+                                ],
+                            }
+                        ),
+                        (
+                            "enp5s0".to_string(),
+                            lxc::types::NetworkState {
+                                addresses: vec![
+                                    lxc::types::NetworkAddress {
+                                        family: "inet".to_string(),
+                                        address: "10.22.100.75".to_string(),
+                                    },
+                                    lxc::types::NetworkAddress {
+                                        family: "inet6".to_string(),
+                                        address: "fd42:2245:81ae:90da:216:3eff:fe3d:1a76"
+                                            .to_string(),
+                                    },
+                                    lxc::types::NetworkAddress {
+                                        family: "inet6".to_string(),
+                                        address: "fe80::216:3eff:fe3d:1a76".to_string(),
+                                    },
+                                ],
+                            }
+                        ),
+                    ]),),
+                }
+            }
+        );
+
+        // check commands
+        let mut r = a.test_into_runner();
+        assert_eq!(r.v.len(), 1);
     }
 
     #[test]
