@@ -10,11 +10,20 @@ backends:
   adhoc-lxd:
     type: adhoc
     allocate: |
-      address="$(spread-adhoc-allocator allocate \
+      stderr_out="$(mktemp)"
+      trap "rv=\$?; rm "$stderr_out"; exit \$rv" EXIT
+
+      if address="$(spread-adhoc-allocator allocate \
                  "$SPREAD_SYSTEM" \
                  ubuntu \
-                 "$SPREAD_SYSTEM_PASSWORD")"
-            ADDRESS "$address"
+                 "$SPREAD_SYSTEM_PASSWORD" 2>"$stderr_out")"; then
+        ADDRESS "$address"
+      else
+        echo "allocation failed, log:"
+        cat "$stderr_out"
+        # FATAL does not work with multiline output
+        FATAL "cannot allocate: $(tail -1 "$stderr_out")"
+      fi
     discard: |
       spread-adhoc-allocator deallocate "$SPREAD_SYSTEM_ADDRESS"
     systems:
