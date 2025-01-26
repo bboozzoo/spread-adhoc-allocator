@@ -26,3 +26,50 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Prepare artifact
+      if: "${{ matrix.target == 'x86_64-unknown-linux-musl' }}"
+      shell: bash
+      run: |
+        mkdir -p $PWD/install-dir
+        cargo install --path . --root $PWD/install-dir
+    - uses: actions/upload-artifact@v4
+      if: "${{ matrix.target == 'x86_64-unknown-linux-musl' }}"
+      with:
+        name: static-bin
+        path: install-dir
+
+  test:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: static-bin
+        path: install-dir
+    - name: Set up allocator
+      shell: bash
+      run: |
+        find . -ls
+        sudo ln -svf $PWD/install-dir/bin/spread-adhoc-allocator /usr/local/bin/
+        chmod a+x $PWD/install-dir/bin/spread-adhoc-allocator
+        # ensure it works with the default PATH
+        spread-adhoc-allocator --help
+    - name: Install spread
+      shell: bash
+      run: |
+        sudo apt update
+        sudo apt install golang-go -yy
+        go install github.com/snapcore/spread/cmd/spread@latest
+        sudo ln -svf ~/go/bin/spread /usr/local/bin/
+    - name: Install LXD
+      shell: bash
+      run: |
+        sudo snap install lxd
+        sudo lxd init --auto
+        sudo usermod -a -G lxd "$(id -u -n)"
+    - name: Execute smoke test
+      shell: bash
+      run: |
+        sudo -u $(id -u -n) -- id
+        sudo -u $(id -u -n) -- spread -vv adhoc-lxd:ubuntu-24.04-64:examples/
