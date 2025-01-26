@@ -66,7 +66,7 @@ fn main() -> Result<()> {
 
             let cfg = fs::File::open(cfg_path).context("cannot open config file")?;
 
-            let alloc = lxd::allocator_with_config(cfg).context("cannot set up allocator")?;
+            let mut alloc = lxd::allocator_with_config(cfg).context("cannot set up allocator")?;
             let res = alloc
                 .allocate(
                     &sysname,
