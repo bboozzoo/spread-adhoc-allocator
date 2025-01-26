@@ -4,6 +4,10 @@
 
 # Example configuration for LXD adhoc allocator.
 
+# when false (the default), nodes will be allocated in a "spread-adhoc" project,
+# otherwise a default project will be used
+use-default-project: false
+
 # trivial grouping for resource definitions reused by all systems
 resoures:
   common: &common-resources
