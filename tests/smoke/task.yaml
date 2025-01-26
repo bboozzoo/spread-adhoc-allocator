@@ -1,0 +1,5 @@
+summary: Smoke test
+
+execute: |
+  cd "$SPREAD_PATH" || exit 1
+  spread -v adhoc-lxd:ubuntu-24.04-64:examples/
