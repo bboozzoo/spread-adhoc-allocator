@@ -65,15 +65,12 @@ suites:
 
     prepare: |
       apt update
-      apt install go rustup -yy
+      apt install golang-go rustup -yy
       go install github.com/snapcore/spread/cmd/spread@latest
       ln -svf ~/go/bin/spread /usr/local/bin/
 
       rustup default stable
-      cargo install --path "$SPREAD_PATH" --root /usr/local
-
-      ln -svf $SPREAD_PATH/target/debug/spread-adhoc-allocator \
-          /usr/local/bin/
+      cargo install --debug --path "$SPREAD_PATH" --root /usr/local
 
       # make sure --help works
       spread-adhoc-allocator --help
