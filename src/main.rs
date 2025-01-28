@@ -46,7 +46,7 @@ enum Command {
     Version,
 }
 
-fn main() -> Result<()> {
+fn try_main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Trace).unwrap();
 
     let cli = Cli::parse();
@@ -104,5 +104,16 @@ fn main() -> Result<()> {
             Ok(())
         }
         None => Err(anyhow!("no command provided, see --help")),
+    }
+}
+
+use std::process;
+
+fn main() -> process::ExitCode {
+    if let Err(err) = try_main() {
+        println!("{:#}", err);
+        process::ExitCode::FAILURE
+    } else {
+        process::ExitCode::SUCCESS
     }
 }
