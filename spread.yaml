@@ -45,6 +45,9 @@ backends:
       - ubuntu-core-24-64:
           username: ubuntu
           password: ubuntu
+      - unsupported-for-tests:
+          username: ubuntu
+          password: ubuntu
 
   lxd:
     type: lxd
