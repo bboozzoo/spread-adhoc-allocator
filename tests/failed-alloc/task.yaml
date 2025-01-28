@@ -1,0 +1,9 @@
+summary: Check failed allocation scenario
+
+execute: |
+  cd "$SPREAD_PATH" || exit 1
+  if spread -v adhoc-lxd:unsupported-for-tests:examples/ > out.log 2>&1 ; then
+      echo "Unexpected success"
+      exit 1
+  fi
+  MATCH 'Cannot allocate adhoc-lxd:unsupported-for-tests: cannot allocate: system "unsupported-for-tests" not found in configuration' < out.log
