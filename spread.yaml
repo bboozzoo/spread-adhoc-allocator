@@ -45,6 +45,9 @@ backends:
       - ubuntu-core-24-64:
           username: ubuntu
           password: ubuntu
+      - fedora-41-64:
+          username: fedora
+          password: fedora
       - unsupported-for-tests:
           username: ubuntu
           password: ubuntu

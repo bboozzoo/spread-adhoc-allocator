@@ -20,36 +20,40 @@ system:
     # VM is the default
     vm: true
     # named list of setup steps to execute after an instance has been allocated
-    setup-steps: ubuntu
+    setup-steps: common
     # resources assigned to the node
     resources: *common-resources
 
   ubuntu-25.04-64:
     image: ubuntu-daily:25.04
-    setup-steps: ubuntu
+    setup-steps: common
     resources: *common-resources
   ubuntu-24.10.04-64:
     image: ubuntu:24.10
-    setup-steps: ubuntu
+    setup-steps: common
     resources: *common-resources
   ubuntu-22.04-64:
     image: ubuntu:22.04
-    setup-steps: ubuntu
+    setup-steps: common
     resources: *common-resources
   ubuntu-20.04-64:
     image: ubuntu:20.04
-    setup-steps: ubuntu
+    setup-steps: common
     resources: *common-resources
   ubuntu-core-24-64:
     image: ubuntu:24.04
-    setup-steps: ubuntu
+    setup-steps: common
     resources: *common-resources
     # enable/disable secure boot
     secure-boot: false
+  fedora-41-64:
+    image: images:fedora/41/cloud
+    setup-steps: common
+    resources: *common-resources
 
 # setup steps after a system has been allocated
 setup:
-  ubuntu:
+  common:
     # wait for the host to complete startup and set up SSH such that spread can
     # log in using user and password
     # note, the snippets are those are copied directly from spread
@@ -68,3 +72,5 @@ setup:
       fi
     # reload sshd configuration
     - killall -HUP sshd || true
+    # Fedora images are bare bones, not even tar is included
+    - ( . /etc/os-release; if [ "$ID" == "fedora" ]; then dnf install tar -y ; fi)
