@@ -15,7 +15,7 @@ backends:
 
       if out="$(spread-adhoc-allocator allocate \
                  "$SPREAD_SYSTEM" \
-                 ubuntu \
+                 "$SPREAD_SYSTEM_USERNAME" \
                  "$SPREAD_SYSTEM_PASSWORD" 2>"$stderr_out")"; then
         ADDRESS "$out"
       else
