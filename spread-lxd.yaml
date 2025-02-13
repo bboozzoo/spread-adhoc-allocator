@@ -72,5 +72,3 @@ setup:
       fi
     # reload sshd configuration
     - killall -HUP sshd || true
-    # Fedora images are bare bones, not even tar is included
-    - ( . /etc/os-release; if [ "$ID" == "fedora" ]; then dnf install tar -y ; fi)
