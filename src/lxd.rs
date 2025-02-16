@@ -23,6 +23,8 @@ pub enum LxdError {
     Executor(String),
     #[error("cannot load configuration: {0}")]
     Config(serde_yml::Error),
+    #[error("cannot validate configuration: {0}")]
+    ConfigInvalid(String),
     #[error("cannot allocate system: {0}")]
     Allocate(String),
     #[error("cannot deallocate system: {0}")]
@@ -691,8 +693,10 @@ struct LxdNodeConfig {
 #[derive(serde::Deserialize, Debug, Default)]
 struct LxdBackendConfig {
     /// Systems with their properties, keyed by spread system name.
+    #[serde(default)]
     system: HashMap<String, LxdNodeConfig>,
     /// Setup steps.
+    #[serde(default)]
     setup: HashMap<String, Vec<String>>,
 }
 
@@ -721,6 +725,20 @@ impl LxdAllocatorBuilder {
         let conf: LxdBackendConfig =
             serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
         log::debug!("config: {:?}", conf);
+
+        // validate configuration consistency:
+        // - system setup steps are found
+
+        for (&ref sysname, &ref sysconf) in &conf.system {
+            if let Some(setup_steps) = sysconf.setup_steps.as_ref() {
+                if let None = conf.setup.get(setup_steps) {
+                    return Err(LxdError::ConfigInvalid(format!(
+                        "system \"{}\" is invalid, setup steps \"{}\" not found in configuration",
+                        sysname, setup_steps
+                    )));
+                }
+            }
+        }
 
         self.cfg = conf;
         Ok(self)
@@ -1011,12 +1029,45 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_config_empty_fails() {
-        assert!(LxdAllocatorBuilder::new().with_config(io::empty()).is_err());
+    fn test_builder_config_empty() {
+        assert!(LxdAllocatorBuilder::new().with_config(io::empty()).is_ok());
     }
 
     #[test]
-    fn test_builder_config_with_data() {
+    fn test_builder_config_valid() {
+        const VALID_CONFIG: &str = r##"
+system:
+  ubuntu-24.04-64:
+    image: foo
+    setup-steps: ubuntu-setup-steps
+
+setup:
+  ubuntu-setup-steps:
+    - echo hello
+"##;
+        let b = LxdAllocatorBuilder::new()
+            .with_config(VALID_CONFIG.as_bytes())
+            .expect("unexpected error");
+        assert!(b.cfg.system.get("ubuntu-24.04-64").is_some());
+        assert!(b.cfg.setup.get("ubuntu-setup-steps").is_some());
+    }
+
+    #[test]
+    fn test_builder_config_missing_steps() {
+        const INVALID_CONFIG: &str = r##"
+system:
+  ubuntu-24.04-64:
+    image: foo
+    setup-steps: steps-not-defined
+"##;
+        assert_eq!(
+            LxdAllocatorBuilder::new().with_config(INVALID_CONFIG.as_bytes()).err().expect("expected an error"),
+            LxdError::ConfigInvalid("system \"ubuntu-24.04-64\" is invalid, setup steps \"steps-not-defined\" not found in configuration".to_string())
+        )
+    }
+
+    #[test]
+    fn test_builder_config_with_trivial_data() {
         LxdAllocatorBuilder::new()
             .with_config("system:\nsetup:".as_bytes())
             .expect("unexpected error");
