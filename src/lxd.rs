@@ -610,7 +610,7 @@ impl LxdAllocator {
     }
 
     /// Returns a new, unconfigured allocator.
-    pub fn new() -> Self {
+    fn new() -> Self {
         LxdAllocator {
             conf: LxdBackendConfig {
                 setup: HashMap::new(),
@@ -688,7 +688,7 @@ struct LxdNodeConfig {
 }
 
 /// Configuration for the LXD backend.
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Default)]
 struct LxdBackendConfig {
     /// Systems with their properties, keyed by spread system name.
     system: HashMap<String, LxdNodeConfig>,
@@ -696,16 +696,54 @@ struct LxdBackendConfig {
     setup: HashMap<String, Vec<String>>,
 }
 
-/// Returns LXD node allocator loading its confugiration from the provided
-/// reader.
-pub fn allocator_with_config<R>(cfg: R) -> Result<LxdAllocator, LxdError>
-where
-    R: io::Read,
-{
-    let conf: LxdBackendConfig = serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
-    log::debug!("config: {:?}", conf);
+/// User configuration for the LXD backend.
+#[derive(serde::Deserialize, Debug, Default)]
+struct LxdBackendUserConfig {}
 
-    Ok(LxdAllocator::new_with_config(conf))
+/// Builder for creating LxdAllocator.
+pub struct LxdAllocatorBuilder {
+    cfg: LxdBackendConfig,
+    user_cfg: LxdBackendUserConfig,
+}
+
+impl LxdAllocatorBuilder {
+    pub fn new() -> Self {
+        LxdAllocatorBuilder {
+            cfg: Default::default(),
+            user_cfg: Default::default(),
+        }
+    }
+
+    pub fn with_config<R>(mut self, cfg: R) -> Result<Self, LxdError>
+    where
+        R: io::Read,
+    {
+        let conf: LxdBackendConfig =
+            serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
+        log::debug!("config: {:?}", conf);
+
+        self.cfg = conf;
+        Ok(self)
+    }
+
+    pub fn with_optional_user_config<R>(mut self, cfg: Option<R>) -> Result<Self, LxdError>
+    where
+        R: io::Read,
+    {
+        if let Some(cfg) = cfg {
+            let conf: LxdBackendUserConfig =
+                serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
+            log::debug!("user config: {:?}", conf);
+
+            self.user_cfg = conf;
+        }
+        Ok(self)
+    }
+
+    pub fn build(self) -> LxdAllocator {
+        LxdAllocator::new_with_config(self.cfg)
+        // TODO apply user config
+    }
 }
 
 /// Returns the file name of a LXD node allocator.
@@ -970,5 +1008,31 @@ mod tests {
         assert_eq!(lxdfy_name("foo-bar"), "foo-bar");
         assert_eq!(lxdfy_name("foo.bar"), "foo-bar");
         assert_eq!(lxdfy_name("foo:bar"), "foo-bar");
+    }
+
+    #[test]
+    fn test_builder_config_empty_fails() {
+        assert!(LxdAllocatorBuilder::new().with_config(io::empty()).is_err());
+    }
+
+    #[test]
+    fn test_builder_config_with_data() {
+        LxdAllocatorBuilder::new()
+            .with_config("system:\nsetup:".as_bytes())
+            .expect("unexpected error");
+    }
+
+    #[test]
+    fn test_builder_user_config_empty() {
+        assert!(LxdAllocatorBuilder::new()
+            .with_optional_user_config::<io::Empty>(None)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_builder_user_config_with_data() {
+        assert!(LxdAllocatorBuilder::new()
+            .with_optional_user_config(Some("user-config:\n".as_bytes()))
+            .is_ok());
     }
 }
