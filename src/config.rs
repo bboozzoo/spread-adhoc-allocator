@@ -7,6 +7,7 @@ use std::fs;
 use std::io::Error;
 use std::path::{Path, PathBuf};
 
+use directories;
 use log;
 
 const SPREAD_CONF_NAME: &'static str = "spread.yaml";
@@ -38,4 +39,13 @@ pub fn locate(name: &str) -> Result<PathBuf, Error> {
         }
     }
     return Err(Error::other(format!("cannot find {SPREAD_CONF_NAME}")));
+}
+
+/// Returns path to user configuration.
+pub fn user_config() -> Option<PathBuf> {
+    if let Some(d) = directories::ProjectDirs::from("", "", "spread-adhoc-allocator") {
+        Some(d.config_dir().to_path_buf().join("config.yaml"))
+    } else {
+        None
+    }
 }
