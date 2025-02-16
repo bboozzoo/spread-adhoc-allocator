@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-use std::fs;
+use std::{fs, io};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -52,6 +52,29 @@ fn try_main() -> Result<()> {
     let cli = Cli::parse();
 
     let conf_name = lxd::config_file_name();
+    let user_conf = if let Some(user_conf_path) = config::user_config() {
+        match fs::File::open(&user_conf_path) {
+            Ok(f) => {
+                log::debug!(
+                    "found user configuration file {}",
+                    user_conf_path.to_string_lossy()
+                );
+                Some(f)
+            }
+            Err(err) => match err.kind() {
+                io::ErrorKind::NotFound => {
+                    log::debug!(
+                        "user configuration file {} not found",
+                        user_conf_path.to_string_lossy()
+                    );
+                    None
+                }
+                _ => return Err(err).context("cannot open user config file"),
+            },
+        }
+    } else {
+        None
+    };
 
     match cli.command {
         Some(Command::Allocate {
@@ -66,7 +89,12 @@ fn try_main() -> Result<()> {
 
             let cfg = fs::File::open(cfg_path).context("cannot open config file")?;
 
-            let mut alloc = lxd::allocator_with_config(cfg).context("cannot set up allocator")?;
+            let mut alloc = lxd::LxdAllocatorBuilder::new()
+                .with_config(cfg)
+                .context("cannot apply configuration")?
+                .with_optional_user_config(user_conf)
+                .context("cannot apply user configuration")?
+                .build();
             let res = alloc
                 .allocate(
                     &sysname,
@@ -92,11 +120,17 @@ fn try_main() -> Result<()> {
 
             let addr = sp.get(0).unwrap();
 
-            lxd::LxdAllocator::new()
+            lxd::LxdAllocatorBuilder::new()
+                .with_optional_user_config(user_conf)
+                .context("cannot apply user configuration")?
+                .build()
                 .deallocate_by_addr(&addr)
                 .with_context(|| format!("cannot deallocate system with address {}", addr))
         }
-        Some(Command::Cleanup) => lxd::LxdAllocator::new()
+        Some(Command::Cleanup) => lxd::LxdAllocatorBuilder::new()
+            .with_optional_user_config(user_conf)
+            .context("cannot apply user configuration")?
+            .build()
             .deallocate_all()
             .context("cannot cleanup all nodes"),
         Some(Command::Version) => {

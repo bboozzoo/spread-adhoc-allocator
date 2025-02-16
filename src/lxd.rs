@@ -23,6 +23,8 @@ pub enum LxdError {
     Executor(String),
     #[error("cannot load configuration: {0}")]
     Config(serde_yml::Error),
+    #[error("cannot validate configuration: {0}")]
+    ConfigInvalid(String),
     #[error("cannot allocate system: {0}")]
     Allocate(String),
     #[error("cannot deallocate system: {0}")]
@@ -610,7 +612,7 @@ impl LxdAllocator {
     }
 
     /// Returns a new, unconfigured allocator.
-    pub fn new() -> Self {
+    fn new() -> Self {
         LxdAllocator {
             conf: LxdBackendConfig {
                 setup: HashMap::new(),
@@ -688,24 +690,78 @@ struct LxdNodeConfig {
 }
 
 /// Configuration for the LXD backend.
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Default)]
 struct LxdBackendConfig {
     /// Systems with their properties, keyed by spread system name.
+    #[serde(default)]
     system: HashMap<String, LxdNodeConfig>,
     /// Setup steps.
+    #[serde(default)]
     setup: HashMap<String, Vec<String>>,
 }
 
-/// Returns LXD node allocator loading its confugiration from the provided
-/// reader.
-pub fn allocator_with_config<R>(cfg: R) -> Result<LxdAllocator, LxdError>
-where
-    R: io::Read,
-{
-    let conf: LxdBackendConfig = serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
-    log::debug!("config: {:?}", conf);
+/// User configuration for the LXD backend.
+#[derive(serde::Deserialize, Debug, Default)]
+struct LxdBackendUserConfig {}
 
-    Ok(LxdAllocator::new_with_config(conf))
+/// Builder for creating LxdAllocator.
+pub struct LxdAllocatorBuilder {
+    cfg: LxdBackendConfig,
+    user_cfg: LxdBackendUserConfig,
+}
+
+impl LxdAllocatorBuilder {
+    pub fn new() -> Self {
+        LxdAllocatorBuilder {
+            cfg: Default::default(),
+            user_cfg: Default::default(),
+        }
+    }
+
+    pub fn with_config<R>(mut self, cfg: R) -> Result<Self, LxdError>
+    where
+        R: io::Read,
+    {
+        let conf: LxdBackendConfig =
+            serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
+        log::debug!("config: {:?}", conf);
+
+        // validate configuration consistency:
+        // - system setup steps are found
+
+        for (&ref sysname, &ref sysconf) in &conf.system {
+            if let Some(setup_steps) = sysconf.setup_steps.as_ref() {
+                if let None = conf.setup.get(setup_steps) {
+                    return Err(LxdError::ConfigInvalid(format!(
+                        "system \"{}\" is invalid, setup steps \"{}\" not found in configuration",
+                        sysname, setup_steps
+                    )));
+                }
+            }
+        }
+
+        self.cfg = conf;
+        Ok(self)
+    }
+
+    pub fn with_optional_user_config<R>(mut self, cfg: Option<R>) -> Result<Self, LxdError>
+    where
+        R: io::Read,
+    {
+        if let Some(cfg) = cfg {
+            let conf: LxdBackendUserConfig =
+                serde_yml::from_reader(cfg).map_err(|e| LxdError::Config(e))?;
+            log::debug!("user config: {:?}", conf);
+
+            self.user_cfg = conf;
+        }
+        Ok(self)
+    }
+
+    pub fn build(self) -> LxdAllocator {
+        LxdAllocator::new_with_config(self.cfg)
+        // TODO apply user config
+    }
 }
 
 /// Returns the file name of a LXD node allocator.
@@ -970,5 +1026,64 @@ mod tests {
         assert_eq!(lxdfy_name("foo-bar"), "foo-bar");
         assert_eq!(lxdfy_name("foo.bar"), "foo-bar");
         assert_eq!(lxdfy_name("foo:bar"), "foo-bar");
+    }
+
+    #[test]
+    fn test_builder_config_empty() {
+        assert!(LxdAllocatorBuilder::new().with_config(io::empty()).is_ok());
+    }
+
+    #[test]
+    fn test_builder_config_valid() {
+        const VALID_CONFIG: &str = r##"
+system:
+  ubuntu-24.04-64:
+    image: foo
+    setup-steps: ubuntu-setup-steps
+
+setup:
+  ubuntu-setup-steps:
+    - echo hello
+"##;
+        let b = LxdAllocatorBuilder::new()
+            .with_config(VALID_CONFIG.as_bytes())
+            .expect("unexpected error");
+        assert!(b.cfg.system.get("ubuntu-24.04-64").is_some());
+        assert!(b.cfg.setup.get("ubuntu-setup-steps").is_some());
+    }
+
+    #[test]
+    fn test_builder_config_missing_steps() {
+        const INVALID_CONFIG: &str = r##"
+system:
+  ubuntu-24.04-64:
+    image: foo
+    setup-steps: steps-not-defined
+"##;
+        assert_eq!(
+            LxdAllocatorBuilder::new().with_config(INVALID_CONFIG.as_bytes()).err().expect("expected an error"),
+            LxdError::ConfigInvalid("system \"ubuntu-24.04-64\" is invalid, setup steps \"steps-not-defined\" not found in configuration".to_string())
+        )
+    }
+
+    #[test]
+    fn test_builder_config_with_trivial_data() {
+        LxdAllocatorBuilder::new()
+            .with_config("system:\nsetup:".as_bytes())
+            .expect("unexpected error");
+    }
+
+    #[test]
+    fn test_builder_user_config_empty() {
+        assert!(LxdAllocatorBuilder::new()
+            .with_optional_user_config::<io::Empty>(None)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_builder_user_config_with_data() {
+        assert!(LxdAllocatorBuilder::new()
+            .with_optional_user_config(Some("user-config:\n".as_bytes()))
+            .is_ok());
     }
 }
