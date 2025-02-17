@@ -27,8 +27,8 @@ pub enum LxdError {
     ConfigInvalid(String),
     #[error("cannot allocate system: {0}")]
     Allocate(String),
-    #[error("cannot deallocate system: {0}")]
-    Deallocate(String),
+    #[error("cannot discard system: {0}")]
+    Discard(String),
     #[error("{0}")]
     NotFound(String),
 }
@@ -63,10 +63,10 @@ pub struct LxdNodeDetails<'a> {
 pub trait LxdAllocatorExecutor {
     /// Allocate a node with given confuguration.
     fn allocate(&mut self, node: &LxdNodeDetails) -> Result<LxdNodeAllocation, LxdError>;
-    /// Deallocate a node with given address.
-    fn deallocate_by_addr(&mut self, addr: &str) -> Result<(), LxdError>;
-    /// Deallocate all nodes.
-    fn deallocate_all(&mut self) -> Result<(), LxdError>;
+    /// Discard a node with given address.
+    fn discard_by_addr(&mut self, addr: &str) -> Result<(), LxdError>;
+    /// Discard all nodes.
+    fn discard_all(&mut self) -> Result<(), LxdError>;
     /// Ensure a given LXD project exists.
     fn ensure_project(&mut self, project: &str) -> Result<(), LxdError>;
 }
@@ -307,8 +307,8 @@ where
         }
     }
 
-    fn deallocate_by_name(&mut self, name: &str) -> Result<(), LxcCliAllocatorError> {
-        log::debug!("deallocate by name '{}'", name);
+    fn discard_by_name(&mut self, name: &str) -> Result<(), LxcCliAllocatorError> {
+        log::debug!("discard by name '{}'", name);
 
         self.runner
             .run(
@@ -442,12 +442,12 @@ where
         })
     }
 
-    fn deallocate_by_addr(&mut self, addr: &str) -> Result<(), LxdError> {
-        log::debug!("deallocate by address '{}'", addr);
+    fn discard_by_addr(&mut self, addr: &str) -> Result<(), LxdError> {
+        log::debug!("discard by address '{}'", addr);
 
         let nodes = self
             .list_nodes()
-            .map_err(|e| LxdError::Deallocate(e.to_string()))?;
+            .map_err(|e| LxdError::Discard(e.to_string()))?;
 
         let mut name: Option<String> = None;
         for instance in nodes.iter() {
@@ -477,22 +477,22 @@ where
         }
 
         if let Some(name) = name {
-            self.deallocate_by_name(&name)
-                .map_err(|e| LxdError::Deallocate(e.to_string()))
+            self.discard_by_name(&name)
+                .map_err(|e| LxdError::Discard(e.to_string()))
         } else {
             Err(LxdError::NotFound(addr.to_string()))
         }
     }
 
-    fn deallocate_all(&mut self) -> Result<(), LxdError> {
+    fn discard_all(&mut self) -> Result<(), LxdError> {
         let nodes = self
             .list_nodes()
-            .map_err(|e| LxdError::Deallocate(e.to_string()))?;
-        log::debug!("deallocate {} nodes: {:?}", nodes.len(), nodes);
+            .map_err(|e| LxdError::Discard(e.to_string()))?;
+        log::debug!("discard {} nodes: {:?}", nodes.len(), nodes);
 
         for node in nodes {
-            self.deallocate_by_name(&node.name)
-                .map_err(|e| LxdError::Deallocate(e.to_string()))?;
+            self.discard_by_name(&node.name)
+                .map_err(|e| LxdError::Discard(e.to_string()))?;
         }
 
         Ok(())
@@ -601,14 +601,14 @@ impl LxdAllocator {
         })
     }
 
-    /// Deallocate a node associated with a given address.
-    pub fn deallocate_by_addr(&mut self, addr: &str) -> Result<(), LxdError> {
-        self.backend.deallocate_by_addr(addr)
+    /// Discard a node associated with a given address.
+    pub fn discard_by_addr(&mut self, addr: &str) -> Result<(), LxdError> {
+        self.backend.discard_by_addr(addr)
     }
 
-    /// Deallocate all nodes.
-    pub fn deallocate_all(&mut self) -> Result<(), LxdError> {
-        self.backend.deallocate_all()
+    /// Discard all nodes.
+    pub fn discard_all(&mut self) -> Result<(), LxdError> {
+        self.backend.discard_all()
     }
 
     /// Returns a new, unconfigured allocator.
@@ -948,12 +948,68 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_discard_by_addr() {
+        let mock_results = vec![
+            Ok(ONE_NODE_LIST.as_bytes().to_vec()),
+            Ok("".as_bytes().to_vec()),
+        ];
+        let mock_results_len = mock_results.len();
+        let r = MockLxcRunner::new(mock_results);
+        let mut a = LxdCliAllocator::new(r);
+        a.discard_by_addr("10.22.100.75").expect("unexpected error");
+
+        // check commands
+        let mut r = a.test_into_runner();
+        assert_eq!(r.seen_calls.len(), mock_results_len);
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec!["--project", "spread-adhoc", "list", "--format=json"]
+        );
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec![
+                "--project",
+                "spread-adhoc",
+                "delete",
+                "--force",
+                "ubuntu-24-04-64-1744396627"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cli_discard_by_name() {
+        let mock_results = vec![Ok("".as_bytes().to_vec())];
+        let mock_results_len = mock_results.len();
+        let r = MockLxcRunner::new(mock_results);
+        let mut a = LxdCliAllocator::new(r);
+        a.discard_by_name("ubuntu-24-04-64-1744396627")
+            .expect("unexpected error");
+
+        // check commands
+        let mut r = a.test_into_runner();
+        assert_eq!(r.seen_calls.len(), mock_results_len);
+        assert_eq!(
+            r.seen_calls.pop_front().expect("expected a call"),
+            vec![
+                "--project",
+                "spread-adhoc",
+                "delete",
+                "--force",
+                "ubuntu-24-04-64-1744396627"
+            ]
+        );
+    }
+
+    #[test]
     fn test_cli_allocate() {
-        let r = MockLxcRunner::new(vec![
+        let mock_results = vec![
             Ok("".as_bytes().to_vec()),            // lxc launch
             Ok(ONE_NODE_LIST.as_bytes().to_vec()), // lxc list
             Ok("".as_bytes().to_vec()),            // lxc exec
-        ]);
+        ];
+        let mock_results_len = mock_results.len();
+        let r = MockLxcRunner::new(mock_results);
         let mut a = LxdCliAllocator::new(r);
         let res = a.allocate(&LxdNodeDetails {
             image: "ubuntu:24.04",
@@ -975,7 +1031,7 @@ mod tests {
 
         // check commands
         let mut r = a.test_into_runner();
-        assert_eq!(r.seen_calls.len(), 3);
+        assert_eq!(r.seen_calls.len(), mock_results_len);
         assert_eq!(
             r.seen_calls.pop_front().expect("expected a call"),
             vec![

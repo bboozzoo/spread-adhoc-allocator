@@ -35,12 +35,12 @@ enum Command {
         /// Password for remote access.
         password: String,
     },
-    /// Deallocate a system.
-    Deallocate {
-        /// Addess, in form of <ip>:<ssh-port>, of a node to deallocate.
+    /// Discard a system.
+    Discard {
+        /// Addess, in form of <ip>:<ssh-port>, of a node to discard.
         addr_port: String,
     },
-    /// Cleanup all allocated systems.
+    /// Discard all allocated systems.
     Cleanup,
     /// Show version information.
     Version,
@@ -112,7 +112,7 @@ fn try_main() -> Result<()> {
                 Err(err) => Err(err),
             }
         }
-        Some(Command::Deallocate { addr_port }) => {
+        Some(Command::Discard { addr_port }) => {
             let sp: Vec<&str> = addr_port.split(":").collect();
             if sp.len() != 2 {
                 return Err(anyhow!("invalid address, expected <addr>:<port>"));
@@ -124,14 +124,14 @@ fn try_main() -> Result<()> {
                 .with_optional_user_config(user_conf)
                 .context("cannot apply user configuration")?
                 .build()
-                .deallocate_by_addr(&addr)
-                .with_context(|| format!("cannot deallocate system with address {}", addr))
+                .discard_by_addr(&addr)
+                .with_context(|| format!("cannot discard system with address {}", addr))
         }
         Some(Command::Cleanup) => lxd::LxdAllocatorBuilder::new()
             .with_optional_user_config(user_conf)
             .context("cannot apply user configuration")?
             .build()
-            .deallocate_all()
+            .discard_all()
             .context("cannot cleanup all nodes"),
         Some(Command::Version) => {
             println!("{} (git {})", VERSION, BUILD_GIT_VERSION);

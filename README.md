@@ -29,12 +29,12 @@ $ spread adhoc-lxd:ubuntu-24.04-64:examples/hello
 2025-01-12 16:56:03 Aborted tasks: 0
 ```
 
-Nodes can be allocated/deallocated manually, check out:
+Nodes can be allocated/discarded manually, check out:
 
 ``` text
 $ spread-adhoc-allocator allocate ubuntu-24.04-64 ubuntu ubuntu
 10.22.100.124:22
-$ spread-adhoc-allocator deallocate 10.22.100.124:22
+$ spread-adhoc-allocator discard 10.22.100.124:22
 $ spread-adhoc-allocator cleanup
 ```
 
