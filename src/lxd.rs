@@ -16,6 +16,8 @@ use serde;
 use serde_yml;
 use thiserror;
 
+use crate::allocator;
+
 /// Wraps LXD executor errors.
 #[derive(thiserror::Error, Debug)]
 pub enum LxdError {
@@ -36,6 +38,15 @@ pub enum LxdError {
 impl PartialEq for LxdError {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()
+    }
+}
+
+impl From<LxdError> for allocator::Error {
+    fn from(err: LxdError) -> Self {
+        match err {
+            LxdError::NotFound(_) => allocator::Error::NotFound(err.to_string()),
+            _ => allocator::Error::Operation(err.to_string()),
+        }
     }
 }
 
@@ -541,27 +552,22 @@ pub struct LxdAllocator {
     conf: LxdBackendConfig,
 }
 
-/// Carries details for confugration of remote user access.
-pub struct RemoteUserAccessConfig<'a> {
-    pub user: &'a str,
-    pub password: &'a str,
-}
-
-impl LxdAllocator {
+impl allocator::NodeAllocator for LxdAllocator {
     /// Allocate a node for a spread system and set up remote access for the
     /// user.
-    pub fn allocate(
+    fn allocate_by_name(
         &mut self,
         sysname: &str,
-        user_config: RemoteUserAccessConfig,
-    ) -> Result<LxdNodeAllocation, LxdError> {
+        user_config: allocator::RemoteUserAccessConfig,
+    ) -> Result<allocator::Node, allocator::Error> {
         let sysconf = if let Some(sysconf) = self.conf.system.get(sysname) {
             sysconf
         } else {
             return Err(LxdError::NotFound(format!(
                 "system \"{}\" not found in configuration",
                 sysname
-            )));
+            ))
+            .into());
         };
 
         let steps = if let Some(setup_steps) = sysconf.setup_steps.as_ref() {
@@ -571,7 +577,8 @@ impl LxdAllocator {
                 return Err(LxdError::NotFound(format!(
                     "setup steps \"{}\" not found in configuration",
                     setup_steps
-                )));
+                ))
+                .into());
             }
         } else {
             log::warn!("no setup steps declared for this system");
@@ -590,27 +597,37 @@ impl LxdAllocator {
 
         self.backend.ensure_project(LXD_PROJECT_NAME)?;
 
-        self.backend.allocate(&LxdNodeDetails {
-            image: &sysconf.image,
-            cpu: sysconf.resources.cpu,
-            memory: sysconf.resources.mem.as_u64(),
-            name: &name,
-            root_size: sysconf.resources.size.as_u64(),
-            secure_boot: sysconf.secure_boot,
-            provision_steps: &steps,
-        })
+        self.backend
+            .allocate(&LxdNodeDetails {
+                image: &sysconf.image,
+                cpu: sysconf.resources.cpu,
+                memory: sysconf.resources.mem.as_u64(),
+                name: &name,
+                root_size: sysconf.resources.size.as_u64(),
+                secure_boot: sysconf.secure_boot,
+                provision_steps: &steps,
+            })
+            .and_then(|node| {
+                Ok(allocator::Node {
+                    addr: node.addr,
+                    ssh_port: node.ssh_port,
+                })
+            })
+            .map_err(|err| allocator::Error::Operation(err.to_string()))
     }
 
     /// Discard a node associated with a given address.
-    pub fn discard_by_addr(&mut self, addr: &str) -> Result<(), LxdError> {
-        self.backend.discard_by_addr(addr)
+    fn discard_by_addr(&mut self, addr: &str) -> Result<(), allocator::Error> {
+        Ok(self.backend.discard_by_addr(addr)?)
     }
 
     /// Discard all nodes.
-    pub fn discard_all(&mut self) -> Result<(), LxdError> {
-        self.backend.discard_all()
+    fn discard_all(&mut self) -> Result<(), allocator::Error> {
+        Ok(self.backend.discard_all()?)
     }
+}
 
+impl LxdAllocator {
     /// Returns a new, unconfigured allocator.
     fn new() -> Self {
         LxdAllocator {
