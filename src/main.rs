@@ -5,21 +5,28 @@
 use std::{fs, io};
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use anyhow::{anyhow, Result};
+use clap::{Parser, Subcommand, ValueEnum};
 use log;
 use simple_logger;
 
 mod config;
 mod lxd;
 
-use anyhow::{anyhow, Result};
-
 const BUILD_GIT_VERSION: &str = env!["BUILD_GIT_VERSION"];
 const VERSION: &str = env!["CARGO_PKG_VERSION"];
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum Backend {
+    Lxd,
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
+    #[arg(value_enum, long, short, default_value_t = Backend::Lxd)]
+    backend: Backend,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -50,6 +57,11 @@ fn try_main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Trace).unwrap();
 
     let cli = Cli::parse();
+
+    match cli.backend {
+        Backend::Lxd => (),
+        _ => return Err(anyhow!("backend {:?} is not supported yet", cli.backend)),
+    }
 
     let conf_name = lxd::config_file_name();
     let user_conf = if let Some(user_conf_path) = config::user_config() {
