@@ -10,8 +10,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use log;
 use simple_logger;
 
+mod allocator;
 mod config;
 mod lxd;
+
+use allocator::NodeAllocator;
 
 const BUILD_GIT_VERSION: &str = env!["BUILD_GIT_VERSION"];
 const VERSION: &str = env!["CARGO_PKG_VERSION"];
@@ -108,9 +111,9 @@ fn try_main() -> Result<()> {
                 .context("cannot apply user configuration")?
                 .build();
             let res = alloc
-                .allocate(
+                .allocate_by_name(
                     &sysname,
-                    lxd::RemoteUserAccessConfig {
+                    allocator::RemoteUserAccessConfig {
                         user: &user,
                         password: &password,
                     },
