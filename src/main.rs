@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+use std::fs::File;
 use std::{fs, io};
 
 use anyhow::Context;
@@ -13,8 +14,6 @@ use simple_logger;
 mod allocator;
 mod config;
 mod lxd;
-
-use allocator::NodeAllocator;
 
 const BUILD_GIT_VERSION: &str = env!["BUILD_GIT_VERSION"];
 const VERSION: &str = env!["CARGO_PKG_VERSION"];
@@ -56,25 +55,24 @@ enum Command {
     Version,
 }
 
-fn try_main() -> Result<()> {
-    simple_logger::init_with_level(log::Level::Trace).unwrap();
+fn mandatory_config(name: &str) -> Result<File> {
+    let cfg_path = config::locate(lxd::config_file_name())
+        .with_context(|| format!("cannot find config file {}", name))?;
 
-    let cli = Cli::parse();
+    log::debug!("loading config from {}", cfg_path.to_string_lossy());
 
-    match cli.backend {
-        Backend::Lxd => (),
-        _ => return Err(anyhow!("backend {:?} is not supported yet", cli.backend)),
-    }
+    fs::File::open(cfg_path).context("cannot open config file")
+}
 
-    let conf_name = lxd::config_file_name();
-    let user_conf = if let Some(user_conf_path) = config::user_config() {
+fn optional_config() -> Result<Option<File>> {
+    if let Some(user_conf_path) = config::user_config() {
         match fs::File::open(&user_conf_path) {
             Ok(f) => {
                 log::debug!(
                     "found user configuration file {}",
                     user_conf_path.to_string_lossy()
                 );
-                Some(f)
+                Ok(Some(f))
             }
             Err(err) => match err.kind() {
                 io::ErrorKind::NotFound => {
@@ -82,14 +80,50 @@ fn try_main() -> Result<()> {
                         "user configuration file {} not found",
                         user_conf_path.to_string_lossy()
                     );
-                    None
+                    Ok(None)
                 }
                 _ => return Err(err).context("cannot open user config file"),
             },
         }
     } else {
-        None
-    };
+        Ok(None)
+    }
+}
+
+fn initialize_backend(
+    backend: &Backend,
+    command: Option<&Command>,
+) -> Result<Box<dyn allocator::NodeAllocator>> {
+    match backend {
+        Backend::Lxd => {
+            let mut builder = lxd::LxdAllocatorBuilder::new();
+
+            if match command {
+                // only allocate needs full configuration
+                Some(Command::Allocate { .. }) => true,
+                _ => false,
+            } {
+                builder = builder
+                    .with_config(mandatory_config(lxd::config_file_name())?)
+                    .context("cannot apply configuration")?;
+            }
+
+            let b = builder
+                .with_optional_user_config(optional_config()?)
+                .context("cannot apply user configuration")?
+                .build();
+            Ok(Box::new(b))
+        }
+        _ => return Err(anyhow!("backend {:?} is not supported yet", backend)),
+    }
+}
+
+fn try_main() -> Result<()> {
+    simple_logger::init_with_level(log::Level::Trace).unwrap();
+
+    let cli = Cli::parse();
+
+    let mut b = initialize_backend(&cli.backend, cli.command.as_ref())?;
 
     match cli.command {
         Some(Command::Allocate {
@@ -97,20 +131,7 @@ fn try_main() -> Result<()> {
             user,
             password,
         }) => {
-            let cfg_path = config::locate(lxd::config_file_name())
-                .with_context(|| format!("cannot find config file {}", conf_name))?;
-
-            log::debug!("loading config from {}", cfg_path.to_string_lossy());
-
-            let cfg = fs::File::open(cfg_path).context("cannot open config file")?;
-
-            let mut alloc = lxd::LxdAllocatorBuilder::new()
-                .with_config(cfg)
-                .context("cannot apply configuration")?
-                .with_optional_user_config(user_conf)
-                .context("cannot apply user configuration")?
-                .build();
-            let res = alloc
+            let res = b
                 .allocate_by_name(
                     &sysname,
                     allocator::RemoteUserAccessConfig {
@@ -135,19 +156,10 @@ fn try_main() -> Result<()> {
 
             let addr = sp.get(0).unwrap();
 
-            lxd::LxdAllocatorBuilder::new()
-                .with_optional_user_config(user_conf)
-                .context("cannot apply user configuration")?
-                .build()
-                .discard_by_addr(&addr)
+            b.discard_by_addr(&addr)
                 .with_context(|| format!("cannot discard system with address {}", addr))
         }
-        Some(Command::Cleanup) => lxd::LxdAllocatorBuilder::new()
-            .with_optional_user_config(user_conf)
-            .context("cannot apply user configuration")?
-            .build()
-            .discard_all()
-            .context("cannot cleanup all nodes"),
+        Some(Command::Cleanup) => b.discard_all().context("cannot cleanup all nodes"),
         Some(Command::Version) => {
             println!("{} (git {})", VERSION, BUILD_GIT_VERSION);
             Ok(())
